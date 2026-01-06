@@ -1,0 +1,72 @@
+2026-01-05 16:40:46,247 - __main__ - INFO - Starting Flask-SocketIO server on port 8000
+2026-01-05 16:40:46,279 - werkzeug - INFO - WARNING: This is a development server. Do not use it in a production deployment. Use a production WSGI server instead.
+ * Running on http://127.0.0.1:8000
+2026-01-05 16:40:46,279 - werkzeug - INFO - Press CTRL+C to quit
+2026-01-05 16:40:46,279 - werkzeug - INFO -  * Restarting with stat
+2026-01-05 16:40:46,523 - __main__ - INFO - Starting Flask-SocketIO server on port 8000
+2026-01-05 16:40:46,538 - werkzeug - WARNING -  * Debugger is active!
+2026-01-05 16:40:46,565 - werkzeug - INFO -  * Debugger PIN: 123-456-789
+2026-01-05 16:40:56,351 - __main__ - INFO - Serving index page
+2026-01-05 16:40:56,356 - werkzeug - INFO - 127.0.0.1 - - [05/Jan/2026 16:40:56] "GET / HTTP/1.1" 200 -
+2026-01-05 16:40:56,399 - werkzeug - INFO - 127.0.0.1 - - [05/Jan/2026 16:40:56] "GET /static/style.css HTTP/1.1" 304 -
+2026-01-05 16:40:56,399 - werkzeug - INFO - 127.0.0.1 - - [05/Jan/2026 16:40:56] "GET /static/script.js HTTP/1.1" 304 -
+2026-01-05 16:40:56,597 - werkzeug - INFO - 127.0.0.1 - - [05/Jan/2026 16:40:56] "GET /favicon.ico HTTP/1.1" 404 -
+2026-01-05 16:43:47,791 - werkzeug - INFO - 127.0.0.1 - - [05/Jan/2026 16:43:47] "GET /socket.io/?EIO=4&transport=polling&t=AbCdEfG HTTP/1.1" 200 -
+2026-01-05 16:43:47,797 - __main__ - INFO - Client connected to SocketIO
+2026-01-05 16:43:47,797 - werkzeug - INFO - 127.0.0.1 - - [05/Jan/2026 16:43:47] "POST /socket.io/?EIO=4&transport=polling&t=AbCdEfH&sid=ExampleSessionID HTTP/1.1" 200 -
+2026-01-05 16:43:49,420 - __main__ - INFO - Toggle transcription event received: {'action': 'start', 'language': 'English'}
+2026-01-05 16:43:49,420 - __main__ - INFO - Starting Deepgram connection with language: English
+2026-01-05 16:43:49,421 - __main__ - INFO - Initializing Deepgram connection with language: English
+2026-01-05 16:43:49,422 - __main__ - INFO - Initializing Deepgram with model: nova-3, language: en
+2026-01-05 16:43:50,301 - __main__ - INFO - Deepgram connection opened: {
+    "type": "Open"
+}
+2026-01-05 16:43:50,302 - __main__ - INFO - Deepgram connection started successfully
+2026-01-05 16:44:01,570 - __main__ - INFO - Toggle transcription event received: {'action': 'stop'}
+2026-01-05 16:44:01,571 - __main__ - INFO - Stopping Deepgram connection
+2026-01-05 16:44:01,571 - __main__ - INFO - Deepgram connection closed: {
+    "type": "Close"
+}
+2026-01-05 16:44:01,843 - __main__ - INFO - Deepgram connection closed: {
+    "type": "Close"
+}
+2026-01-05 16:44:02,345 - __main__ - INFO - Deepgram connection finished
+2026-01-05 16:44:06,325 - __main__ - INFO - Toggle transcription event received: {'action': 'start', 'language': 'Hindi'}
+2026-01-05 16:44:06,326 - __main__ - INFO - Starting Deepgram connection with language: Hindi
+2026-01-05 16:44:06,326 - __main__ - INFO - Initializing Deepgram connection with language: Hindi
+2026-01-05 16:44:06,326 - __main__ - INFO - Closing existing Deepgram connection
+2026-01-05 16:44:06,327 - __main__ - INFO - Initializing Deepgram with model: nova-3, language: hi
+2026-01-05 16:44:07,157 - __main__ - INFO - Deepgram connection opened: {
+    "type": "Open"
+}
+2026-01-05 16:44:07,157 - __main__ - INFO - Deepgram connection started successfully
+2026-01-05 16:44:11,407 - __main__ - INFO - Toggle transcription event received: {'action': 'stop'}
+2026-01-05 16:44:11,407 - __main__ - INFO - Stopping Deepgram connection
+2026-01-05 16:44:11,408 - __main__ - INFO - Deepgram connection closed: {
+    "type": "Close"
+}
+2026-01-05 16:44:12,075 - __main__ - INFO - Deepgram connection closed: {
+    "type": "Close"
+}
+2026-01-05 16:44:12,579 - __main__ - INFO - Deepgram connection finished
+2026-01-05 16:44:22,518 - __main__ - INFO - Toggle transcription event received: {'action': 'start', 'language': 'Spanish'}
+2026-01-05 16:44:22,519 - __main__ - INFO - Starting Deepgram connection with language: Spanish
+2026-01-05 16:44:22,519 - __main__ - INFO - Initializing Deepgram connection with language: Spanish
+2026-01-05 16:44:22,519 - __main__ - INFO - Closing existing Deepgram connection
+2026-01-05 16:44:22,519 - __main__ - INFO - Initializing Deepgram with model: nova-3, language: es
+2026-01-05 16:44:23,362 - __main__ - INFO - Deepgram connection opened: {
+    "type": "Open"
+}
+2026-01-05 16:44:23,363 - __main__ - INFO - Deepgram connection started successfully
+2026-01-05 16:44:26,967 - __main__ - INFO - Toggle transcription event received: {'action': 'stop'}
+2026-01-05 16:44:26,967 - __main__ - INFO - Stopping Deepgram connection
+2026-01-05 16:44:26,968 - __main__ - INFO - Deepgram connection closed: {
+    "type": "Close"
+}
+2026-01-05 16:44:27,742 - __main__ - INFO - Deepgram connection closed: {
+    "type": "Close"
+}
+2026-01-05 16:44:28,243 - __main__ - INFO - Deepgram connection finished
+2026-01-05 17:13:59,415 - __main__ - INFO - Deepgram connection finished due to silence timeout
+2026-01-05 17:13:59,416 - __main__ - INFO - Stopping Deepgram connection
+2026-01-05 17:13:59,416 - __main__ - WARNING - Audio stream received but Deepgram connection is not initialized

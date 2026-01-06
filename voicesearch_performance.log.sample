@@ -1,0 +1,35 @@
+2026-01-05 16:52:07,548 - SESSION_START | Language: English | Model: nova-3 | Timestamp: 1767612127.5482082
+2026-01-05 16:52:09,197 - TRANSCRIPTION | Count: 1 | TimeSinceStart: 1648.98ms | TimeSinceLast: 0.00ms | Text: "hello world"
+2026-01-05 16:52:09,567 - TRANSCRIPTION | Count: 2 | TimeSinceStart: 2019.60ms | TimeSinceLast: 370.61ms | Text: "hello world how are you"
+2026-01-05 16:52:12,095 - SESSION_END | TotalDuration: 4546.95ms | TotalTranscriptions: 2
+2026-01-05 16:54:41,900 - SESSION_START | Language: English | Model: nova-3 | Timestamp: 1767612281.900637
+2026-01-05 16:54:43,477 - TRANSCRIPTION | Count: 1 | ResponseTime: 304.78ms | TimeSinceStart: 1576.87ms | TimeSinceLast: 0.00ms | Text: "i'm looking for"
+2026-01-05 16:54:43,998 - TRANSCRIPTION | Count: 2 | ResponseTime: 826.16ms | TimeSinceStart: 2098.25ms | TimeSinceLast: 521.38ms | Text: "i'm looking for a product"
+2026-01-05 16:54:45,022 - SESSION_END | TotalDuration: 3121.88ms | TotalTranscriptions: 2
+2026-01-05 16:56:00,688 - SESSION_START | Language: English | Model: nova-3 | Timestamp: 1767612360.688076
+2026-01-05 16:56:02,426 - TRANSCRIPTION | Count: 1 | ResponseTime: 367.28ms | TimeSinceStart: 1738.57ms | TimeSinceLast: 0.00ms | Text: "can you help me"
+2026-01-05 16:56:02,777 - TRANSCRIPTION | Count: 2 | ResponseTime: 718.25ms | TimeSinceStart: 2089.55ms | TimeSinceLast: 350.98ms | Text: "can you help me find something"
+2026-01-05 16:56:11,715 - SESSION_END | TotalDuration: 11027.38ms | TotalTranscriptions: 2
+2026-01-05 16:56:45,129 - SESSION_START | Language: Hindi | Model: nova-3 | Timestamp: 1767612405.1291242
+2026-01-05 16:56:47,049 - TRANSCRIPTION | Count: 1 | ResponseTime: 501.86ms | TimeSinceStart: 1920.03ms | TimeSinceLast: 0.00ms | Text: "नमस्ते"
+2026-01-05 16:56:47,852 - TRANSCRIPTION | Count: 2 | ResponseTime: 285.95ms | TimeSinceStart: 2723.46ms | TimeSinceLast: 803.43ms | Text: "नमस्ते मैं कैसे मदद कर सकता हूं"
+2026-01-05 16:56:49,049 - SESSION_END | TotalDuration: 3920.70ms | TotalTranscriptions: 2
+2026-01-05 16:58:21,578 - SESSION_START | Language: Spanish | Model: nova-3 | Timestamp: 1767612501.578779
+2026-01-05 16:58:25,443 - TRANSCRIPTION | Count: 1 | ResponseTime: 633.65ms | TimeSinceStart: 3865.07ms | TimeSinceLast: 0.00ms | Text: "hola"
+2026-01-05 16:58:26,193 - TRANSCRIPTION | Count: 2 | ResponseTime: 366.40ms | TimeSinceStart: 4614.27ms | TimeSinceLast: 749.20ms | Text: "hola cómo estás"
+2026-01-05 16:58:38,357 - TRANSCRIPTION | Count: 3 | ResponseTime: 378.80ms | TimeSinceStart: 16778.88ms | TimeSinceLast: 12164.61ms | Text: "muy bien"
+2026-01-05 16:58:38,360 - TRANSCRIPTION | Count: 4 | ResponseTime: 381.28ms | TimeSinceStart: 16781.37ms | TimeSinceLast: 2.48ms | Text: "muy bien gracias"
+2026-01-05 16:58:39,003 - SESSION_END | TotalDuration: 17424.83ms | TotalTranscriptions: 4
+2026-01-05 17:13:52,711 - SESSION_START | Language: English | Model: nova-3 | Timestamp: 1767613432.711313
+2026-01-05 17:13:54,393 - TRANSCRIPTION | Count: 1 | ResponseTime: 275.94ms | TimeSinceStart: 1682.58ms | TimeSinceLast: 0.00ms | Text: "what time is it"
+2026-01-05 17:13:55,406 - TRANSCRIPTION | Count: 2 | ResponseTime: 267.11ms | TimeSinceStart: 2694.66ms | TimeSinceLast: 1012.09ms | Text: "what time is it now"
+2026-01-05 17:13:55,408 - TRANSCRIPTION | Count: 3 | ResponseTime: 269.78ms | TimeSinceStart: 2697.34ms | TimeSinceLast: 2.67ms | Text: "what time is it now please"
+2026-01-05 17:13:59,415 - SILENCE_TIMEOUT | Timeout: 4000ms
+2026-01-05 17:13:59,416 - SESSION_END | TotalDuration: 6704.98ms | TotalTranscriptions: 3
+2026-01-05 17:14:28,740 - SESSION_START | Language: English | Model: nova-3 | Timestamp: 1767613468.7408261
+2026-01-05 17:14:30,203 - TRANSCRIPTION | Count: 1 | ResponseTime: 354.16ms | TimeSinceStart: 1462.88ms | TimeSinceLast: 0.00ms | Text: "search for"
+2026-01-05 17:14:31,149 - TRANSCRIPTION | Count: 2 | ResponseTime: 277.64ms | TimeSinceStart: 2408.63ms | TimeSinceLast: 945.75ms | Text: "search for products"
+2026-01-05 17:14:32,243 - TRANSCRIPTION | Count: 3 | ResponseTime: 353.53ms | TimeSinceStart: 3502.25ms | TimeSinceLast: 1093.62ms | Text: "search for products online"
+2026-01-05 17:14:35,231 - TRANSCRIPTION | Count: 4 | ResponseTime: 281.26ms | TimeSinceStart: 6491.06ms | TimeSinceLast: 2988.81ms | Text: "okay"
+2026-01-05 17:14:39,237 - SILENCE_TIMEOUT | Timeout: 4000ms
+2026-01-05 17:14:39,239 - SESSION_END | TotalDuration: 10498.29ms | TotalTranscriptions: 4

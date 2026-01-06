@@ -1,0 +1,13 @@
+__pycache__/
+.python-version
+.env
+.ngrok.pid
+.app.pid
+.ngrok_url
+/archive/
+venv/
+.pytest_cache/
+.DS_Store
+voicesearch_app.log
+voicesearch_performance.log
+.env.local
