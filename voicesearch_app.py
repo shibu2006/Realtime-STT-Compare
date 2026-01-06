@@ -12,6 +12,35 @@ from deepgram import (
     LiveOptions
 )
 
+# Import Azure OpenAI handler
+# Define stub functions first to satisfy type checker
+def initialize_azure_openai_connection(socketio_instance: SocketIO, language_name: str = "English") -> bool:
+    """Stub function - will be replaced if import succeeds"""
+    return False
+
+def send_audio_to_azure_openai(audio_data: bytes) -> bool:
+    """Stub function - will be replaced if import succeeds"""
+    return False
+
+def close_azure_openai_connection() -> None:
+    """Stub function - will be replaced if import succeeds"""
+    pass
+
+try:
+    from azure_openai_handler import (
+        initialize_azure_openai_connection as _init_azure,
+        send_audio_to_azure_openai as _send_azure,
+        close_azure_openai_connection as _close_azure
+    )
+    # Replace stub functions with real ones
+    initialize_azure_openai_connection = _init_azure
+    send_audio_to_azure_openai = _send_azure
+    close_azure_openai_connection = _close_azure
+    AZURE_OPENAI_AVAILABLE = True
+except ImportError as e:
+    logging.warning(f"Azure OpenAI handler not available: {e}")
+    AZURE_OPENAI_AVAILABLE = False
+
 if TYPE_CHECKING:
     from deepgram.clients import LiveClient
 
@@ -48,13 +77,13 @@ socketio = SocketIO(app, cors_allowed_origins='*', async_mode='threading')
 API_KEY = os.getenv("DEEPGRAM_API_KEY")
 
 if not API_KEY:
-    raise RuntimeError("DEEPGRAM_API_KEY environment variable is not set")
-
-# Validate API key format (Deepgram API keys typically start with a specific pattern)
-if len(API_KEY) < 20:
-    logger.warning(f"API key seems unusually short ({len(API_KEY)} characters). Please verify it's correct.")
+    logger.warning("DEEPGRAM_API_KEY environment variable is not set - Deepgram API will not work")
 else:
-    logger.info(f"API key loaded successfully (length: {len(API_KEY)} characters)")
+    # Validate API key format (Deepgram API keys typically start with a specific pattern)
+    if len(API_KEY) < 20:
+        logger.warning(f"API key seems unusually short ({len(API_KEY)} characters). Please verify it's correct.")
+    else:
+        logger.info(f"API key loaded successfully (length: {len(API_KEY)} characters)")
 
 # Get silence timeout from environment (in milliseconds, convert to seconds)
 SILENCE_TIMEOUT_MS = int(os.getenv("SILENCE_TIMEOUT", "5000"))  # Default 5 seconds if not set
@@ -69,7 +98,8 @@ silence_timer = None  # Timer for silence timeout
 silence_timer_lock = threading.Lock()  # Lock for thread-safe timer operations
 
 # Initialize Deepgram client (simplified to match reference implementation)
-deepgram = DeepgramClient(API_KEY)
+# Only initialize if API_KEY is available
+deepgram = DeepgramClient(API_KEY) if API_KEY else None
 
 dg_connection: Optional['LiveClient'] = None
 
@@ -171,6 +201,10 @@ def initialize_deepgram_connection(language_name="English"):
     logger.info(f"Initializing Deepgram with model: {model}, language: {language_code}")
     
     # Initialize Deepgram client and connection
+    if not deepgram:
+        logger.error("Deepgram client not initialized - API_KEY is missing")
+        return False
+    
     try:
         connection =  deepgram.listen.live.v("1") #deepgram.listen.websocket.v("1")
         logger.info("Deepgram Live connection object created successfully")
@@ -292,52 +326,139 @@ def index():
     logger.info("Serving index page")
     return render_template('index.html')
 
+# Store current API provider for audio routing
+current_api_provider = "Deepgram API"
+
 @socketio.on('audio_stream')
 def handle_audio_stream(data):
-    global last_audio_send_time
-    if dg_connection:
-        try:
-            # Convert data to bytes if it's not already
-            if isinstance(data, bytes):
-                audio_bytes = data
-            elif isinstance(data, bytearray):
-                audio_bytes = bytes(data)
-            else:
-                # Try to convert to bytes
-                audio_bytes = bytes(data)
-            
-            # Track when audio is sent to Deepgram for response time calculation
-            last_audio_send_time = time.perf_counter()
-            dg_connection.send(audio_bytes)
-            logger.debug(f"Audio stream data sent to Deepgram ({len(audio_bytes)} bytes)")
-        except Exception as e:
-            logger.error(f"Error sending audio data to Deepgram: {e}")
+    """
+    Handle audio stream from client
+    Routes audio to the appropriate API provider based on current connection
+    """
+    global last_audio_send_time, current_api_provider
+    
+    # Extract audio bytes
+    # The browser sends audio as ArrayBuffer/bytes directly
+    if isinstance(data, bytes):
+        audio_bytes = data
+    elif isinstance(data, bytearray):
+        audio_bytes = bytes(data)
+    elif isinstance(data, dict):
+        # If data is a dict, try to get audio bytes
+        audio_bytes = data.get("audio")
+        if isinstance(audio_bytes, (bytes, bytearray)):
+            audio_bytes = bytes(audio_bytes)
+        else:
+            logger.warning("Audio data format not recognized in dict")
+            return
     else:
-        logger.warning("Audio stream received but Deepgram connection is not initialized")
+        # Try to convert to bytes
+        try:
+            audio_bytes = bytes(data)
+        except Exception as e:
+            logger.error(f"Error converting audio data to bytes: {e}")
+            return
+    
+    # Route audio to appropriate API based on current provider
+    if current_api_provider == "Azure OpenAI":
+        if AZURE_OPENAI_AVAILABLE:
+            # Note: Azure OpenAI expects PCM16 format, but browser sends WebM
+            # For now, we'll send the raw bytes - conversion may be needed
+            #logger.info(f"📤 Sending audio to Azure OpenAI: {len(audio_bytes)} bytes")
+            success = send_audio_to_azure_openai(audio_bytes)
+            if success:
+                logger.debug(f"✅ Audio stream data sent to Azure OpenAI ({len(audio_bytes)} bytes)")
+            else:
+                # This is expected during initial connection establishment - use debug level
+                logger.debug(f"⏳ Audio not sent yet - Azure OpenAI connection establishing ({len(audio_bytes)} bytes)")
+        else:
+            logger.warning("Audio stream received but Azure OpenAI is not available")
+    elif current_api_provider == "ElvenLabs ScribeV2":
+        # TODO: Implement ElvenLabs ScribeV2 audio handling
+        logger.warning("ElvenLabs ScribeV2 audio handling not yet implemented")
+    else:  # Default to Deepgram API
+        if dg_connection:
+            try:
+                # Track when audio is sent to Deepgram for response time calculation
+                last_audio_send_time = time.perf_counter()
+                dg_connection.send(audio_bytes)
+                logger.debug(f"Audio stream data sent to Deepgram ({len(audio_bytes)} bytes)")
+            except Exception as e:
+                logger.error(f"Error sending audio data to Deepgram: {e}")
+        else:
+            logger.warning("Audio stream received but Deepgram connection is not initialized")
 
 @socketio.on('toggle_transcription')
 def handle_toggle_transcription(data):
+    global current_api_provider
     logger.info(f"Toggle transcription event received: {data}")
     action = data.get("action")
+    api_provider = data.get("api", "Deepgram API")  # Default to Deepgram API
     language_name = data.get("language", "English")  # Default to English if not provided
+    
+    # Update current API provider
+    current_api_provider = api_provider
+    
     if action == "start":
-        logger.info(f"Starting Deepgram connection with language: {language_name}")
-        success = initialize_deepgram_connection(language_name)
-        if success:
-            socketio.emit('transcription_status', {'status': 'started', 'language': language_name})
-        else:
-            socketio.emit('transcription_status', {'status': 'error', 'message': 'Failed to start Deepgram connection'})
+        if api_provider == "Azure OpenAI":
+            if not AZURE_OPENAI_AVAILABLE:
+                socketio.emit('transcription_status', {
+                    'status': 'error',
+                    'message': 'Azure OpenAI handler not available. Please check dependencies.'
+                })
+                return
+            
+            logger.info(f"Starting Azure OpenAI connection with language: {language_name}")
+            success = initialize_azure_openai_connection(socketio, language_name)
+            if success:
+                socketio.emit('transcription_status', {'status': 'started', 'api': 'Azure OpenAI'})
+            else:
+                socketio.emit('transcription_status', {
+                    'status': 'error',
+                    'message': 'Failed to start Azure OpenAI connection'
+                })
+        elif api_provider == "ElvenLabs ScribeV2":
+            # TODO: Implement ElvenLabs ScribeV2 integration
+            logger.warning("ElvenLabs ScribeV2 not yet implemented")
+            socketio.emit('transcription_status', {
+                'status': 'error',
+                'message': 'ElvenLabs ScribeV2 is not yet implemented'
+            })
+        else:  # Default to Deepgram API
+            if not API_KEY:
+                socketio.emit('transcription_status', {
+                    'status': 'error',
+                    'message': 'DEEPGRAM_API_KEY environment variable is not set'
+                })
+                return
+            
+            logger.info(f"Starting Deepgram connection with language: {language_name}")
+            success = initialize_deepgram_connection(language_name)
+            if success:
+                socketio.emit('transcription_status', {'status': 'started', 'language': language_name, 'api': 'Deepgram API'})
+            else:
+                socketio.emit('transcription_status', {'status': 'error', 'message': 'Failed to start Deepgram connection'})
+    
     elif action == "stop":
-        logger.info("Stopping Deepgram connection")
-        # Stop silence timer when manually stopping
-        stop_silence_timer()
-        if dg_connection:
-            try:
-                dg_connection.finish()
-                logger.info("Deepgram connection finished")
-            except Exception as e:
-                logger.error(f"Error finishing Deepgram connection: {e}")
-        socketio.emit('transcription_status', {'status': 'stopped'})
+        if api_provider == "Azure OpenAI":
+            logger.info("Stopping Azure OpenAI connection")
+            close_azure_openai_connection()
+            socketio.emit('transcription_status', {'status': 'stopped'})
+        elif api_provider == "ElvenLabs ScribeV2":
+            # TODO: Implement ElvenLabs ScribeV2 stop
+            logger.warning("ElvenLabs ScribeV2 stop not yet implemented")
+            socketio.emit('transcription_status', {'status': 'stopped'})
+        else:  # Default to Deepgram API
+            logger.info("Stopping Deepgram connection")
+            # Stop silence timer when manually stopping
+            stop_silence_timer()
+            if dg_connection:
+                try:
+                    dg_connection.finish()
+                    logger.info("Deepgram connection finished")
+                except Exception as e:
+                    logger.error(f"Error finishing Deepgram connection: {e}")
+            socketio.emit('transcription_status', {'status': 'stopped'})
 
 @socketio.on('connect')
 def server_connect():
@@ -347,8 +468,10 @@ def server_connect():
 def server_disconnect():
     global dg_connection
     logger.info('Client disconnected from SocketIO')
-    # Clean up Deepgram connection when client disconnects
+    # Clean up all connections when client disconnects
     stop_silence_timer()
+    
+    # Clean up Deepgram connection
     if dg_connection:
         try:
             logger.info('Closing Deepgram connection on client disconnect')
@@ -356,6 +479,14 @@ def server_disconnect():
         except Exception as e:
             logger.error(f"Error closing Deepgram connection on disconnect: {e}")
         dg_connection = None
+    
+    # Clean up Azure OpenAI connection
+    if AZURE_OPENAI_AVAILABLE:
+        try:
+            close_azure_openai_connection()
+            logger.info('Closed Azure OpenAI connection on client disconnect')
+        except Exception as e:
+            logger.error(f"Error closing Azure OpenAI connection on disconnect: {e}")
 
 @socketio.on('restart_deepgram')
 def restart_deepgram(data):

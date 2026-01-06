@@ -20,13 +20,19 @@
         <span class="title-voice">Voice</span><span class="title-search">Search</span>
       </h1>
       
-      <div class="subtitle" id="subtitle">
-        <span>Realtime speech transcription through Deepgram API</span>
+      <div class="api-container">
+        <label for="apiSelect" class="api-label">Realtime speech transcription API :</label>
+        <select id="apiSelect" class="api-select">
+          <option value="Deepgram API" selected>Deepgram API</option>
+          <option value="Azure OpenAI">Azure OpenAI</option>
+          <option value="ElvenLabs ScribeV2">ElvenLabs ScribeV2</option>
+        </select>
       </div>
       
       <div class="language-container">
         <label for="languageSelect" class="language-label">Language:</label>
         <select id="languageSelect" class="language-select">
+          <option value="Auto">Auto</option>
           <option value="Chinese">Chinese</option>
           <option value="Danish">Danish</option>
           <option value="Dutch">Dutch</option>

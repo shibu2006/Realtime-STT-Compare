@@ -4,4 +4,7 @@ Flask-SocketIO==5.3.6
 python-dotenv==1.0.0
 sounddevice==0.5.3
 websockets==15.0.1
+websocket-client==1.7.0
 numpy==2.3.3
+# if WebM format is detected, pydub is required to convert it to PCM16
+#pydub==0.25.1
