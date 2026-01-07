@@ -86,7 +86,7 @@ def handle_elevenlabs_silence_timeout():
     global elevenlabs_connection_open, elevenlabs_socketio
     
     logger.info(f"ElevenLabs silence timeout reached ({ELEVENLABS_SILENCE_TIMEOUT_MS}ms). Stopping transcription automatically.")
-    performance_logger.info(f"SILENCE_TIMEOUT | API: ElevenLabs | Timeout: {ELEVENLABS_SILENCE_TIMEOUT_MS}ms")
+    performance_logger.info(f"SILENCE_TIMEOUT | Timeout: {ELEVENLABS_SILENCE_TIMEOUT_MS}ms")
     
     # Close the WebSocket connection
     elevenlabs_connection_open = False
@@ -108,7 +108,7 @@ def handle_elevenlabs_silence_timeout():
             f"TotalTranscriptions: {elevenlabs_transcription_count} | Reason: SilenceTimeout"
         )
         performance_logger.info(
-            f"SESSION_END | API: ElevenLabs | TotalDuration: {session_duration_ms:.2f}ms | "
+            f"SESSION_END | TotalDuration: {session_duration_ms:.2f}ms | "
             f"TotalTranscriptions: {elevenlabs_transcription_count} | Reason: SilenceTimeout"
         )
         elevenlabs_session_start_time = None
@@ -251,7 +251,7 @@ def initialize_elevenlabs_connection(socketio_instance: SocketIO, language_name:
             if elevenlabs_session_start_time:
                 session_duration_ms = (time.perf_counter() - elevenlabs_session_start_time) * 1000
                 performance_logger.info(
-                    f"SESSION_END | API: ElevenLabs | TotalDuration: {session_duration_ms:.2f}ms | "
+                    f"SESSION_END | TotalDuration: {session_duration_ms:.2f}ms | "
                     f"TotalTranscriptions: {elevenlabs_transcription_count}"
                 )
     
@@ -297,7 +297,7 @@ def handle_elevenlabs_message(message: str):
             
             # Log session start
             performance_logger.info(
-                f"SESSION_START | API: ElevenLabs | Language: {elevenlabs_language} | Timestamp: {time.time()}"
+                f"SESSION_START | Language: {elevenlabs_language} | Model: ElevenLabs Scribe V2 | Timestamp: {time.time()}"
             )
             
             # Notify frontend that connection is ready
@@ -338,7 +338,7 @@ def handle_elevenlabs_message(message: str):
                 
                 # Log performance metrics
                 performance_logger.info(
-                    f"TRANSCRIPTION | API: ElevenLabs | Count: {elevenlabs_transcription_count} | "
+                    f"TRANSCRIPTION | Count: {elevenlabs_transcription_count} | "
                     f"ResponseTime: {transcription_response_time_ms:.2f}ms | "
                     f"TimeSinceStart: {time_since_start_ms:.2f}ms | "
                     f"TimeSinceLast: {time_since_last_ms:.2f}ms | "
@@ -359,7 +359,7 @@ def handle_elevenlabs_message(message: str):
         elif message_type in ("error", "auth_error", "quota_exceeded", "transcriber_error", "input_error", "rate_limited"):
             error = data.get("error", data.get("message", "Unknown error"))
             logger.error(f"❌ ElevenLabs {message_type}: {error}")
-            performance_logger.error(f"ERROR | API: ElevenLabs | Type: {message_type} | Message: {error}")
+            performance_logger.error(f"ERROR | Type: {message_type} | Message: {error}")
             if elevenlabs_socketio:
                 elevenlabs_socketio.emit('transcription_status', {
                     'status': 'error',
