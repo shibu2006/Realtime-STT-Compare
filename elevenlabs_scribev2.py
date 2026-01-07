@@ -6,9 +6,21 @@ import os
 import base64
 import time
 import numpy as np
+import logging
 from typing import Optional
 from websockets.asyncio.client import ClientConnection
 from dotenv import load_dotenv
+
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(filename)s:%(lineno)d - %(message)s',
+    handlers=[
+        logging.StreamHandler()  # Log to console
+    ]
+)
+
+logger = logging.getLogger(__name__)
 
 class ElevenLabsRealtimeSTT:
     """Real-time Speech-to-Text using ElevenLabs Scribe v2 Realtime"""
@@ -56,7 +68,7 @@ class ElevenLabsRealtimeSTT:
             "xi-api-key": self.api_key
         }
         self.ws = await websockets.connect(self.ws_url, additional_headers=headers)
-        print("✅ Connected to ElevenLabs Scribe v2 Realtime")
+        logger.info("✅ Connected to ElevenLabs Scribe v2 Realtime")
     
     async def send_audio_chunk(self, audio_data: bytes):
         """Send audio chunk to the API"""
@@ -74,10 +86,10 @@ class ElevenLabsRealtimeSTT:
             }
             await self.ws.send(json.dumps(message))
         except websockets.exceptions.ConnectionClosed:
-            print("\n⚠️  Connection closed while sending audio")
+            logger.warning("⚠️  Connection closed while sending audio")
             raise
         except Exception as e:
-            print(f"\n⚠️  Error sending audio chunk: {e}")
+            logger.error(f"⚠️  Error sending audio chunk: {e}")
             raise
     
     async def commit(self):
@@ -94,12 +106,12 @@ class ElevenLabsRealtimeSTT:
             message = {"message_type": "commit"}
             await self.ws.send(json.dumps(message))
             self.last_commit_time = current_time
-            print(f"\n💾 Committed transcript segment")
+            logger.info("💾 Committed transcript segment")
         except websockets.exceptions.ConnectionClosed:
-            print("\n⚠️  Connection closed while committing")
+            logger.warning("⚠️  Connection closed while committing")
             raise
         except Exception as e:
-            print(f"\n⚠️  Error committing: {e}")
+            logger.error(f"⚠️  Error committing: {e}")
             raise
     
     async def receive_transcriptions(self):
@@ -114,76 +126,75 @@ class ElevenLabsRealtimeSTT:
                     
                     if message_type == "session_started":
                         session_id = data.get("session_id", "N/A")
-                        print(f"\n✅ Session started: {session_id}")
+                        logger.info(f"✅ Session started: {session_id}")
                         config = data.get("config", {})
                         if config:
-                            print(f"   Config: {json.dumps(config, indent=2)}")
+                            logger.debug(f"   Config: {json.dumps(config, indent=2)}")
                         self.session_started.set()  # Signal that session is ready
                     elif message_type == "partial_transcript":
                         text = data.get("text", "")
                         if text:
-                            print(f"📝 Partial: {text}", end="\r", flush=True)
+                            logger.info(f"📝 Partial: {text}")
                     elif message_type in ("committed_transcript", "final_transcript"):
                         text = data.get("text", "")
                         if text:
-                            print(f"\n✨ Final: {text}", flush=True)
+                            logger.info(f"✨ Final: {text}")
                         else:
-                            print(f"\n✨ Final (empty segment)")
+                            logger.info("✨ Final (empty segment)")
                     elif message_type == "committed_transcript_with_timestamps":
                         text = data.get("text", "")
                         words = data.get("words", [])
                         if text:
-                            print(f"\n✨ Final (with timestamps): {text}")
+                            logger.info(f"✨ Final (with timestamps): {text}")
                             if words:
-                                print(f"   Words: {words[:5]}...")  # Show first 5 words
+                                logger.debug(f"   Words: {words[:5]}...")  # Show first 5 words
                     elif message_type == "commit_throttled":
                         # Back off on commit frequency
                         self.min_commit_interval = min(60.0, self.min_commit_interval * 1.5)
-                        print(f"\n⚠️  Commit throttled, backing off to {self.min_commit_interval}s")
+                        logger.warning(f"⚠️  Commit throttled, backing off to {self.min_commit_interval}s")
                     elif message_type in ("error", "auth_error", "quota_exceeded", 
                                           "transcriber_error", "input_error", "rate_limited"):
                         error = data.get("error", data.get("message", "Unknown error"))
-                        print(f"\n❌ {message_type}: {error}")
-                        print(f"   Full error data: {json.dumps(data, indent=2)}")
+                        logger.error(f"❌ {message_type}: {error}")
+                        logger.debug(f"   Full error data: {json.dumps(data, indent=2)}")
                     else:
-                        # Debug: print unknown message types
-                        print(f"\n🔍 Message type '{message_type}': {json.dumps(data, indent=2)}")
+                        # Debug: log unknown message types
+                        logger.debug(f"🔍 Message type '{message_type}': {json.dumps(data, indent=2)}")
                 except json.JSONDecodeError:
-                    print(f"\n⚠️  Received non-JSON message: {message[:200]}")
+                    logger.warning(f"⚠️  Received non-JSON message: {message[:200]}")
                     
         except websockets.exceptions.ConnectionClosed as e:
-            print(f"\n🔌 Connection closed: {e}")
+            logger.info(f"🔌 Connection closed: {e}")
         except Exception as e:
-            print(f"\n❌ Error receiving transcriptions: {e}")
+            logger.error(f"❌ Error receiving transcriptions: {e}")
             import traceback
             traceback.print_exc()
     
     async def stream_microphone_audio(self):
-        """Capture and stream audio from microphone"""
         # Wait for session to start before sending audio
-        print("⏳ Waiting for session to start...")
+        logger.info("⏳ Waiting for session to start...")
         await self.session_started.wait()
-        print("✅ Session ready, starting audio stream...")
+        logger.info("✅ Session ready, starting audio stream...")
         
         audio = pyaudio.PyAudio()
         stream = None
         
         try:
             # List available audio input devices for debugging
-            print("\n🔍 Available audio input devices:")
+            logger.info("🔍 Available audio input devices:")
             input_devices = []
             for i in range(audio.get_device_count()):
                 info = audio.get_device_info_by_index(i)
                 max_input_channels = int(info.get('maxInputChannels', 0))
                 if max_input_channels > 0:
                     input_devices.append(i)
-                    print(f"   Device {i}: {info['name']} (inputs: {max_input_channels})")
+                    logger.info(f"   Device {i}: {info['name']} (inputs: {max_input_channels})")
             
             if not input_devices:
-                print("❌ No audio input devices found!")
+                logger.error("❌ No audio input devices found!")
                 return
             
-            print(f"\n🎙️  Opening default input device...")
+            logger.info("🎙️  Opening default input device...")
             stream = audio.open(
                 format=self.format,
                 channels=self.channels,
@@ -193,15 +204,15 @@ class ElevenLabsRealtimeSTT:
             )
             
             if not stream.is_active():
-                print("❌ Audio stream is not active!")
+                logger.error("❌ Audio stream is not active!")
                 return
             
-            print(f"\n🎤 Streaming audio... (Press Ctrl+C to stop)")
-            print(f"   Language: {self.language_code}")
-            print(f"   Commit strategy: {'VAD (automatic)' if self.use_vad else 'Manual'}")
+            logger.info("🎤 Streaming audio... (Press Ctrl+C to stop)")
+            logger.info(f"   Language: {self.language_code}")
+            logger.info(f"   Commit strategy: {'VAD (automatic)' if self.use_vad else 'Manual'}")
             if not self.use_vad:
-                print(f"   Commit interval: {self.commit_interval_chunks} chunks (~{self.commit_interval_chunks * (self.chunk_size / self.sample_rate):.1f}s)")
-            print(f"   Sample rate: {self.sample_rate} Hz, Chunk size: {self.chunk_size} bytes\n")
+                logger.info(f"   Commit interval: {self.commit_interval_chunks} chunks (~{self.commit_interval_chunks * (self.chunk_size / self.sample_rate):.1f}s)")
+            logger.info(f"   Sample rate: {self.sample_rate} Hz, Chunk size: {self.chunk_size} bytes")
             
             chunk_counter = 0
             bytes_sent = 0
@@ -209,7 +220,7 @@ class ElevenLabsRealtimeSTT:
             # Use executor to run blocking I/O operations
             loop = asyncio.get_event_loop()
             
-            print("🔄 Starting audio capture loop...")
+            logger.info("🔄 Starting audio capture loop...")
             
             def read_audio_chunk():
                 """Helper function to read audio chunk (needed for executor)"""
@@ -221,7 +232,7 @@ class ElevenLabsRealtimeSTT:
                     audio_chunk = await loop.run_in_executor(None, read_audio_chunk)
                     
                     if not audio_chunk or len(audio_chunk) == 0:
-                        print("\n⚠️  No audio data received")
+                        logger.warning("⚠️  No audio data received")
                         await asyncio.sleep(0.1)
                         continue
                     
@@ -231,9 +242,9 @@ class ElevenLabsRealtimeSTT:
                     audio_array = np.frombuffer(audio_chunk, dtype=np.int16)
                     rms = np.sqrt(np.mean(np.square(audio_array.astype(np.float32))))
                     
-                    # Print first few chunks for debugging
+                    # Log first few chunks for debugging
                     if chunk_counter < 5:
-                        print(f"📤 Chunk {chunk_counter}: {len(audio_chunk)} bytes, RMS: {rms:.0f}")
+                        logger.info(f"📤 Chunk {chunk_counter}: {len(audio_chunk)} bytes, RMS: {rms:.0f}")
                     
                     await self.send_audio_chunk(audio_chunk)
                     chunk_counter += 1
@@ -242,20 +253,20 @@ class ElevenLabsRealtimeSTT:
                     if not self.use_vad and chunk_counter % self.commit_interval_chunks == 0:
                         await self.commit()
                     
-                    # Print progress every 50 chunks with audio level
+                    # Log progress every 50 chunks with audio level
                     if chunk_counter % 50 == 0:
-                        print(f"   Sent {chunk_counter} chunks ({bytes_sent / 1024:.1f} KB, RMS: {rms:.0f})", end="\r", flush=True)
+                        logger.debug(f"   Sent {chunk_counter} chunks ({bytes_sent / 1024:.1f} KB, RMS: {rms:.0f})")
                         
                 except Exception as e:
-                    print(f"\n⚠️  Error reading/sending audio chunk: {e}")
+                    logger.error(f"⚠️  Error reading/sending audio chunk: {e}")
                     import traceback
                     traceback.print_exc()
                     await asyncio.sleep(0.1)
                 
         except KeyboardInterrupt:
-            print("\n⏹️ Stopping audio stream...")
+            logger.info("⏹️ Stopping audio stream...")
         except Exception as e:
-            print(f"\n❌ Error in audio streaming: {e}")
+            logger.error(f"❌ Error in audio streaming: {e}")
             import traceback
             traceback.print_exc()
         finally:
@@ -263,7 +274,7 @@ class ElevenLabsRealtimeSTT:
                 stream.stop_stream()
                 stream.close()
             audio.terminate()
-            print("🔇 Audio stream closed")
+            logger.info("🔇 Audio stream closed")
     
     async def run(self):
         """Main execution method"""
@@ -279,7 +290,7 @@ class ElevenLabsRealtimeSTT:
         """Close WebSocket connection"""
         if self.ws:
             await self.ws.close()
-            print("🔌 Disconnected")
+            logger.info("🔌 Disconnected")
 
 
 async def main():

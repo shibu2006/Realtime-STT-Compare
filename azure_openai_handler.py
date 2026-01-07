@@ -18,7 +18,7 @@ logger = logging.getLogger(__name__)
 performance_logger = logging.getLogger('azure_performance')
 performance_logger.setLevel(logging.INFO)
 performance_handler = logging.FileHandler('voicesearch_performance.log')
-performance_formatter = logging.Formatter('%(asctime)s - %(message)s')
+performance_formatter = logging.Formatter('%(asctime)s - %(filename)s:%(lineno)d - %(message)s')
 performance_handler.setFormatter(performance_formatter)
 performance_logger.addHandler(performance_handler)
 performance_logger.propagate = False  # Don't propagate to root logger

@@ -3,6 +3,7 @@ import json
 import base64
 import threading
 import pyaudio
+import logging
 # Import WebSocketApp from websocket-client package
 # The package name is 'websocket-client' but it's imported as 'websocket'
 try:
@@ -12,6 +13,17 @@ except ImportError:
     import websocket  # type: ignore
     WebSocketApp = websocket.WebSocketApp  # type: ignore
 from dotenv import load_dotenv
+
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(filename)s:%(lineno)d - %(message)s',
+    handlers=[
+        logging.StreamHandler()  # Log to console
+    ]
+)
+
+logger = logging.getLogger(__name__)
 
 load_dotenv() # Load environment variables from .env
 
@@ -35,9 +47,9 @@ endpoint_host = endpoint_host.split('/')[0].rstrip('/')
 url = f"wss://{endpoint_host}/openai/realtime?api-version=2025-04-01-preview&intent=transcription"
 headers = { "api-key": OPENAI_API_KEY}
 
-# Debug: print the URL
-print(f"Endpoint host: {endpoint_host}")
-print(f"Connecting to: {url}")
+# Debug: log the URL
+logger.info(f"Endpoint host: {endpoint_host}")
+logger.info(f"Connecting to: {url}")
 # Audio stream parameters (16-bit PCM, 16kHz mono)
 RATE = 24000
 CHANNELS = 1
@@ -52,7 +64,7 @@ stream = audio_interface.open(format=FORMAT,
                               frames_per_buffer=CHUNK)
 
 def on_open(ws):
-    print("Connected! Start speaking...")
+    logger.info("Connected! Start speaking...")
     session_config = {
         "type": "transcription_session.update",
         "session": {
@@ -81,7 +93,7 @@ def on_open(ws):
                     "audio": audio_base64
                 }))
         except Exception as e:
-            print("Audio streaming error:", e)
+            logger.error(f"Audio streaming error: {e}")
             ws.close()
 
     threading.Thread(target=stream_microphone, daemon=True).start()
@@ -97,13 +109,13 @@ def on_message(ws, message):
         if event_type == "conversation.item.input_audio_transcription.delta":
             transcript_piece = data.get("delta", "")
             if transcript_piece:
-                print(transcript_piece, end=' ', flush=True)
+                logger.info(f"Transcript delta: {transcript_piece}")
         if event_type == "conversation.item.input_audio_transcription.completed":
-            print("Final Data:", data["transcript"])
+            logger.info(f"Final Data: {data['transcript']}")
         if event_type == "item":
             transcript = data.get("item", "")
             if transcript:
-                print("\nFinal transcript:", transcript)
+                logger.info(f"Final transcript: {transcript}")
 
     except Exception:
         pass  # Ignore unrelated events
@@ -113,15 +125,15 @@ def on_message(ws, message):
 
 
 def on_error(ws, error):
-    print("WebSocket error:", error)
+    logger.error(f"WebSocket error: {error}")
 
 def on_close(ws, close_status_code, close_msg):
-    print("Disconnected from server.")
+    logger.info("Disconnected from server.")
     stream.stop_stream()
     stream.close()
     audio_interface.terminate()
 
-print("Connecting to OpenAI Realtime API...")
+logger.info("Connecting to OpenAI Realtime API...")
 ws_app = WebSocketApp(
     url,
     header=headers,
