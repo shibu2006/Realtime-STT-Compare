@@ -1,28 +1,34 @@
-# VoiceSearch - Real-time Speech Transcription Application
+# VoiceTranscribe - Real-time Speech Transcription Application
 
-A Flask-based web application that provides real-time speech-to-text transcription using Deepgram's Live Transcription API. The application features a modern web interface, multi-language support, automatic silence detection, and comprehensive performance logging.
+VoiceTranscribe is a Flask-based web application that provides real-time **S**peech-**T**o-**T**ext transcription using multiple AI-powered transcription APIs. Choose between **Deepgram API**, **Azure OpenAI**, or **ElevenLabs ScribeV2** for your transcription needs. The application features a modern web interface, multi-language support, automatic silence detection, and comprehensive performance logging.
 
 ## 🚀 Features
 
-- **Real-time Speech Transcription**: Live audio transcription using Deepgram's advanced speech recognition
-- **Multi-language Support**: Supports 16 languages including English, Spanish, French, German, Hindi, Japanese, and more
+- **Multiple Transcription APIs**: Choose between three powerful transcription services:
+  - **Deepgram API**: Advanced speech recognition with live transcription
+  - **Azure OpenAI**: GPT-4o-mini-transcribe model with automatic language detection
+  - **ElevenLabs ScribeV2**: Real-time transcription with voice activity detection
+- **Multi-language Support**: Supports many languages including English, Spanish, French, German, Hindi, Japanese, Indic and more
 - **Automatic Silence Detection**: Automatically stops recording after a configurable period of silence
 - **Performance Logging**: Detailed performance metrics for each transcription session
 - **WebSocket Communication**: Real-time bidirectional communication between client and server
 - **Public URL Support**: Optional ngrok integration for public access
-- **Modern UI**: Clean and intuitive user interface with real-time transcription display
+- **Modern UI**: Clean and intuitive user interface with real-time transcription display and API selection
 
 ## 📋 Requirements
 
 - Python 3.8 or higher
-- Deepgram API key ([Get one here](https://console.deepgram.com/signup))
+- **At least one API key** from the supported providers:
+  - **Deepgram API key** ([Get one here](https://console.deepgram.com/signup))
+  - **Azure OpenAI API key and endpoint** ([Get one here](https://portal.azure.com/))
+  - **ElevenLabs API key** ([Get one here](https://elevenlabs.io/))
 - (Optional) ngrok for public URL access ([Download here](https://ngrok.com/download))
 
 ## 🛠️ Installation
 
 1. **Clone the repository** (if applicable) or navigate to the project directory:
    ```bash
-   cd flask-live-transcription
+   cd realtime-stt-compare
    ```
 
 2. **Create a virtual environment**:
@@ -46,14 +52,29 @@ A Flask-based web application that provides real-time speech-to-text transcripti
    ```
 
 5. **Set up environment variables**:
-   Create a `.env` file in the root directory:
+   Create a `.env` file in the root directory with your API keys:
    ```bash
+   # At least one API key is required
+   
+   # Deepgram API (recommended for general use)
    DEEPGRAM_API_KEY=your_deepgram_api_key_here
+   
+   # Azure OpenAI (for GPT-4o-mini-transcribe model)
+   AZURE_OPENAI_API_KEY=your_azure_openai_api_key_here
+   AZURE_OPENAI_ENDPOINT=https://your-resource-name.cognitiveservices.azure.com
+   
+   # ElevenLabs ScribeV2 (for voice activity detection)
+   ELEVENLABS_API_KEY=sk_your_elevenlabs_api_key_here
+   
+   # Optional settings
    SILENCE_TIMEOUT=5000
    ```
    
-   - `DEEPGRAM_API_KEY`: Your Deepgram API key (required)
-   - `SILENCE_TIMEOUT`: Silence timeout in milliseconds (optional, default: 5000ms)
+   **API Key Requirements:**
+   - **DEEPGRAM_API_KEY**: Your Deepgram API key (optional if using other APIs)
+   - **AZURE_OPENAI_API_KEY** & **AZURE_OPENAI_ENDPOINT**: Required for Azure OpenAI transcription
+   - **ELEVENLABS_API_KEY**: Required for ElevenLabs ScribeV2 transcription
+   - **SILENCE_TIMEOUT**: Silence timeout in milliseconds (optional, default: 5000ms)
 
 ## 🚀 Quick Start
 
@@ -130,30 +151,62 @@ pkill ngrok
 ## 📖 Usage
 
 1. **Open the application** in your web browser
-2. **Select a language** from the dropdown menu
-3. **Click the microphone button** to start recording
-4. **Speak** - your speech will be transcribed in real-time
-5. **Click the microphone button again** to stop recording
-6. The transcription will automatically stop after the silence timeout period
+2. **Select a transcription API** from the dropdown menu:
+   - **Deepgram API**: Fast and accurate, supports 16+ languages
+   - **Azure OpenAI**: GPT-4o-mini-transcribe with automatic language detection
+   - **ElevenLabs ScribeV2**: Advanced voice activity detection
+3. **Select a language** from the dropdown menu (or "Auto" for automatic detection)
+4. **Click the microphone button** to start recording
+5. **Speak** - your speech will be transcribed in real-time
+6. **Click the microphone button again** to stop recording
+7. The transcription will automatically stop after the silence timeout period
+
+### API-Specific Features
+
+#### Deepgram API
+- **Best for**: General-purpose transcription, production use
+- **Languages**: 16 supported languages with explicit selection
+- **Model**: Nova-3 (latest Deepgram model)
+- **Features**: Fast response times, high accuracy
+
+#### Azure OpenAI
+- **Best for**: Automatic language detection, GPT-powered transcription
+- **Languages**: Most languages with auto-detection option (no manual selection needed)
+- **Model**: gpt-4o-mini-transcribe
+- **Features**: Automatic language detection, GPT-4 powered accuracy
+
+#### ElevenLabs ScribeV2
+- **Best for**: Voice activity detection, real-time streaming
+- **Languages**: 99 supported languages with auto-detection option (no manual selection needed)
+- **Model**: scribe_v2_realtime
+- **Features**: Advanced VAD, real-time streaming, commit strategies
 
 ### Supported Languages
 
-- English (default)
-- Chinese
-- Danish
-- Dutch
-- Finnish
-- French
-- German
-- Hindi
-- Italian
-- Japanese
-- Korean
-- Norwegian
-- Portuguese
-- Russian
-- Spanish
-- Swedish
+**Languages supported :**
+- Supported with Deepgram
+   - English (default)
+   - Chinese
+   - Danish
+   - Dutch
+   - Finnish
+   - French
+   - German
+   - Hindi
+   - Italian
+   - Japanese
+   - Korean
+   - Norwegian
+   - Portuguese
+   - Russian
+   - Spanish
+   - Swedish
+- Supported with Azure OpenAI
+   - All languages with Indic Languages (Tamil, Malayalam, Kannada, Telugu, Odia, Bengali, Urdu)
+- Supported with ElevenLabs Scribe v2
+   - 99 languages along with Indic
+
+**Note**: Azure OpenAI, ElevenLabs automatically detects the language, while Deepgram allows manual selection.
 
 ## 📊 Logging
 
@@ -163,7 +216,7 @@ The application generates two types of logs:
 Contains general application events:
 - Server startup/shutdown
 - Client connections/disconnections
-- Deepgram connection events
+- Deepgram / Azure OpenAI / ElevenLabs connection events
 - Errors and warnings
 
 ### 2. Performance Log (`voicesearch_performance.log`)
@@ -189,12 +242,34 @@ Contains detailed performance metrics for each transcription session:
 Create a `.env` file in the root directory:
 
 ```env
-# Required
-DEEPGRAM_API_KEY=your_api_key_here
+# API Keys (at least one required)
+DEEPGRAM_API_KEY=your_deepgram_api_key_here
+AZURE_OPENAI_API_KEY=your_azure_openai_api_key_here
+AZURE_OPENAI_ENDPOINT=https://your-resource-name.cognitiveservices.azure.com
+ELEVENLABS_API_KEY=sk_your_elevenlabs_api_key_here
 
-# Optional
+# Optional Settings
 SILENCE_TIMEOUT=5000  # Milliseconds (default: 5000)
 ```
+
+### API Configuration Details
+
+#### Deepgram API
+- **Required**: `DEEPGRAM_API_KEY`
+- **Get API Key**: [Deepgram Console](https://console.deepgram.com/signup)
+- **Format**: Standard API key string
+
+#### Azure OpenAI
+- **Required**: `AZURE_OPENAI_API_KEY` and `AZURE_OPENAI_ENDPOINT`
+- **Get API Key**: [Azure Portal](https://portal.azure.com/)
+- **Endpoint Format**: `https://your-resource-name.cognitiveservices.azure.com`
+- **Model**: Uses gpt-4o-mini-transcribe automatically
+
+#### ElevenLabs ScribeV2
+- **Required**: `ELEVENLABS_API_KEY`
+- **Get API Key**: [ElevenLabs Dashboard](https://elevenlabs.io/)
+- **Format**: Starts with `sk_`
+- **Additional Dependency**: Requires `websockets` library (`pip install websockets`)
 
 ### Silence Timeout
 
@@ -206,7 +281,7 @@ The `SILENCE_TIMEOUT` setting controls how long the application waits for silenc
 ## 📁 Project Structure
 
 ```
-flask-live-transcription/
+realtime-stt-compare/
 ├── voicesearch_app.py          # Main application file
 ├── start.sh                    # Startup script
 ├── requirements.txt            # Python dependencies
@@ -223,20 +298,38 @@ flask-live-transcription/
 
 ## 🔧 Troubleshooting
 
-### Issue: "Failed to start ngrok"
+### API Key Issues
 
-**Solution**: 
+**Issue: "DEEPGRAM_API_KEY is not set"**
+**Solution**:
+- Create a `.env` file in the root directory
+- Add your API key: `DEEPGRAM_API_KEY=your_key_here`
+- Make sure the file is named exactly `.env` (not `env` or `.env.txt`)
+
+**Issue: "AZURE_OPENAI_API_KEY is not set"**
+**Solution**:
+- Add both `AZURE_OPENAI_API_KEY` and `AZURE_OPENAI_ENDPOINT` to your `.env` file
+- Ensure the endpoint format is correct: `https://your-resource-name.cognitiveservices.azure.com`
+
+**Issue: "ELEVENLABS_API_KEY is not set"**
+**Solution**:
+- Add `ELEVENLABS_API_KEY=sk_your_key_here` to your `.env` file
+- Install websockets: `pip install websockets`
+
+### Connection Issues
+
+**Issue: "Failed to start [API] connection"**
+**Solution**:
 - Check if ngrok is installed: `which ngrok`
 - Check if ngrok is authenticated: `ngrok config add-authtoken YOUR_TOKEN`
 - Stop existing ngrok sessions: `pkill ngrok`
 - Check ngrok logs: `cat /tmp/ngrok.log`
 
-### Issue: "DEEPGRAM_API_KEY is not set"
-
+**Issue: "API handler not available"**
 **Solution**:
-- Create a `.env` file in the root directory
-- Add your API key: `DEEPGRAM_API_KEY=your_key_here`
-- Make sure the file is named exactly `.env` (not `env` or `.env.txt`)
+- For ElevenLabs: Install websockets with `pip install websockets`
+- For Azure OpenAI: Install websocket-client with `pip install websocket-client`
+- Restart the application after installing dependencies
 
 ### Issue: "Port 8000 is already in use"
 
@@ -250,6 +343,8 @@ flask-live-transcription/
 **Solution**:
 - Make sure virtual environment is activated: `source venv/bin/activate`
 - Install requirements: `pip install -r requirements.txt`
+- For ElevenLabs: `pip install websockets`
+- For Azure OpenAI: `pip install websocket-client`
 
 ### Issue: Microphone not working
 
@@ -270,28 +365,36 @@ pytest tests/
 ### WebSocket Events
 
 **Client → Server:**
-- `toggle_transcription`: Start/stop transcription
+- `toggle_transcription`: Start/stop transcription with API selection
   ```javascript
-  { action: "start", language: "English" }
-  { action: "stop" }
+  { 
+    action: "start", 
+    api: "Deepgram API", // or "Azure OpenAI" or "ElvenLabs ScribeV2"
+    language: "English" 
+  }
+  { action: "stop", api: "Deepgram API" }
   ```
 - `audio_stream`: Send audio data chunks
-- `restart_deepgram`: Restart Deepgram connection with new language
+- `restart_deepgram`: Restart Deepgram connection with new language (Deepgram only)
 
 **Server → Client:**
 - `transcription_update`: Receive transcription text
   ```javascript
   { transcription: "Hello world" }
   ```
-- `transcription_status`: Connection status updates
+- `transcription_status`: Connection status updates with API info
+  ```javascript
+  { status: "started", api: "Azure OpenAI" }
+  ```
 - `silence_timeout`: Notification when silence timeout occurs
 
 ## 🔒 Security Notes
 
 - Never commit your `.env` file to version control
-- Keep your Deepgram API key secure
+- Keep all API keys secure (Deepgram, Azure OpenAI, ElevenLabs)
 - Use HTTPS in production
 - Consider implementing authentication for production use
+- Each API provider has different rate limits and usage policies
 
 ## 📄 License
 
@@ -308,29 +411,49 @@ See [LICENSE](LICENSE) file for details.
 
 For issues related to:
 - **Deepgram API**: [Deepgram Documentation](https://developers.deepgram.com)
+- **Azure OpenAI**: [Azure OpenAI Documentation](https://docs.microsoft.com/en-us/azure/cognitive-services/openai/)
+- **ElevenLabs API**: [ElevenLabs Documentation](https://elevenlabs.io/docs)
 - **Application Issues**: Check the logs (`voicesearch_app.log`) for error details
 
 ## 🎯 Features in Detail
 
+### API Comparison
+
+| Feature | Deepgram API | Azure OpenAI | ElevenLabs ScribeV2 |
+|---------|-------------|--------------|-------------------|
+| **Best For** | General purpose, production | Auto language detection | Voice activity detection |
+| **Model** | Nova-3 | gpt-4o-mini-transcribe | scribe_v2_realtime |
+| **Language Selection** | Manual | Automatic | Manual or Auto |
+| **Response Time** | Very Fast | Fast | Fast |
+| **Accuracy** | High | Very High | High |
+| **Special Features** | Live transcription | GPT-powered | Advanced VAD |
+| **Dependencies** | None | websocket-client | websockets |
+
+### Multiple Transcription APIs
+- **Deepgram API**: Uses Nova-3 model for fast, accurate transcription
+- **Azure OpenAI**: Leverages GPT-4o-mini-transcribe for intelligent language detection
+- **ElevenLabs ScribeV2**: Advanced voice activity detection with real-time streaming
+
 ### Real-time Transcription
-- Uses Deepgram's Live Transcription API
-- Low latency streaming transcription
+- Low latency streaming transcription across all APIs
 - Supports interim results for better UX
+- API-specific optimizations for each provider
 
 ### Multi-language Support
-- 16 languages supported
-- Easy language switching
-- Uses Deepgram's latest models (nova-3 for most languages)
+- Many languages supported across all APIs
+- Automatic language detection (Azure OpenAI, ElevenLabs)
+- Manual language selection (Deepgram)
 
 ### Performance Tracking
 - Tracks response time for each transcription
 - Logs session duration and transcription count
+- API-specific performance metrics
 - Helps identify performance bottlenecks
 
 ### Automatic Silence Detection
-- Configurable timeout period
+- Configurable timeout period (applies to all APIs)
 - Automatically stops recording after silence
-- Prevents unnecessary API calls
+- Prevents unnecessary API calls and costs
 
 ## 🚀 Deployment
 
@@ -354,4 +477,4 @@ For production deployment:
 
 ---
 
-**Made with ❤️ using Flask, SocketIO, and Deepgram**
+**Made with ❤️ using Flask, SocketIO, Deepgram, Azure OpenAI, and ElevenLabs**
