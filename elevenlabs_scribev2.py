@@ -13,27 +13,40 @@ from dotenv import load_dotenv
 class ElevenLabsRealtimeSTT:
     """Real-time Speech-to-Text using ElevenLabs Scribe v2 Realtime"""
     
-    def __init__(self, api_key: str, model_id: str = "scribe_v2_realtime"):
+    def __init__(self, api_key: str, model_id: str = "scribe_v2_realtime", use_vad: bool = True, language_code: str = "en"):
         self.api_key = api_key
         self.model_id = model_id
-        self.ws_url = f"wss://api.elevenlabs.io/v1/speech-to-text/realtime?model_id={model_id}"
+        self.use_vad = use_vad
+        self.language_code = language_code
+        
+        # Build WebSocket URL with proper query parameters
+        commit_strategy = "vad" if use_vad else "manual"
+        self.ws_url = (
+            f"wss://api.elevenlabs.io/v1/speech-to-text/realtime"
+            f"?model_id={model_id}"
+            f"&audio_format=pcm_16000"
+            f"&commit_strategy={commit_strategy}"
+            f"&language_code={language_code}"
+        )
+        if use_vad:
+            # VAD parameters for automatic speech detection
+            self.ws_url += "&vad_silence_threshold_secs=1.0&vad_threshold=0.5"
 
         self.ws: Optional[ClientConnection] = None
         self.session_started = asyncio.Event()
         self.last_commit_time = 0.0
-        self.min_commit_interval = 0.5  # Minimum 0.5 seconds between commits
+        self.min_commit_interval = 20.0  # Commit every 20-30 seconds as recommended
         
-        # Audio configuration
+        # Audio configuration - must match audio_format in URL
         self.sample_rate = 16000
         self.chunk_size = 4096
         self.channels = 1
         self.format = pyaudio.paInt16
         
-        # Calculate commit interval: need at least 0.3s of audio
-        # Time per chunk = chunk_size / sample_rate = 4096 / 16000 = 0.256s
-        # To get 0.3s, we need at least 2 chunks. Use 4 chunks (~1 second) to be safe
+        # Calculate commit interval for manual mode
+        # Recommended: commit every 20-30 seconds
         self.chunks_per_second = self.sample_rate / self.chunk_size  # ≈ 3.9 chunks/second
-        self.commit_interval_chunks = max(4, int(1.0 * self.chunks_per_second))  # Commit every ~1 second
+        self.commit_interval_chunks = int(20.0 * self.chunks_per_second)  # Commit every ~20 seconds
         
     async def connect(self):
         """Establish WebSocket connection with authentication"""
@@ -43,37 +56,48 @@ class ElevenLabsRealtimeSTT:
         self.ws = await websockets.connect(self.ws_url, additional_headers=headers)
         print("✅ Connected to ElevenLabs Scribe v2 Realtime")
     
-    async def send_audio_chunk(self, audio_data: bytes, commit: bool = False):
+    async def send_audio_chunk(self, audio_data: bytes):
         """Send audio chunk to the API"""
         if not self.ws:
             return
         
-        # Enforce minimum commit interval
-        if commit:
-            current_time = time.time()
-            time_since_last_commit = current_time - self.last_commit_time
-            if time_since_last_commit < self.min_commit_interval:
-                commit = False  # Skip commit if too soon
-        
         try:
             # Encode audio as base64
             audio_base64 = base64.b64encode(audio_data).decode('utf-8')
+            # Message format per working implementation
             message = {
                 "message_type": "input_audio_chunk",
                 "audio_base_64": audio_base64,
-                "commit": commit,
                 "sample_rate": self.sample_rate
             }
             await self.ws.send(json.dumps(message))
-            
-            if commit:
-                self.last_commit_time = time.time()
-                print(f"\n💾 Committed audio chunk ({len(audio_data)} bytes)")
         except websockets.exceptions.ConnectionClosed:
             print("\n⚠️  Connection closed while sending audio")
             raise
         except Exception as e:
             print(f"\n⚠️  Error sending audio chunk: {e}")
+            raise
+    
+    async def commit(self):
+        """Manually commit the current transcript segment (for manual commit strategy)"""
+        if not self.ws or self.use_vad:
+            return
+        
+        current_time = time.time()
+        time_since_last_commit = current_time - self.last_commit_time
+        if time_since_last_commit < self.min_commit_interval:
+            return  # Skip commit if too soon
+        
+        try:
+            message = {"message_type": "commit"}
+            await self.ws.send(json.dumps(message))
+            self.last_commit_time = current_time
+            print(f"\n💾 Committed transcript segment")
+        except websockets.exceptions.ConnectionClosed:
+            print("\n⚠️  Connection closed while committing")
+            raise
+        except Exception as e:
+            print(f"\n⚠️  Error committing: {e}")
             raise
     
     async def receive_transcriptions(self):
@@ -84,42 +108,49 @@ class ElevenLabsRealtimeSTT:
             async for message in self.ws:
                 try:
                     data = json.loads(message)
-                    message_type = data.get("message_type")
+                    message_type = data.get("type", data.get("message_type"))
                     
                     if message_type == "session_started":
                         session_id = data.get("session_id", "N/A")
                         print(f"\n✅ Session started: {session_id}")
-                        print(f"   Config: {json.dumps(data.get('config', {}), indent=2)}")
+                        config = data.get("config", {})
+                        if config:
+                            print(f"   Config: {json.dumps(config, indent=2)}")
                         self.session_started.set()  # Signal that session is ready
                     elif message_type == "partial_transcript":
                         text = data.get("text", "")
                         if text:
                             print(f"📝 Partial: {text}", end="\r", flush=True)
-                        # Don't print empty partials to reduce noise
-                    elif message_type == "final_transcript":
+                    elif message_type in ("committed_transcript", "final_transcript"):
                         text = data.get("text", "")
                         if text:
                             print(f"\n✨ Final: {text}", flush=True)
                         else:
-                            print(f"\n✨ Final (empty): {json.dumps(data)}")
+                            print(f"\n✨ Final (empty segment)")
+                    elif message_type == "committed_transcript_with_timestamps":
+                        text = data.get("text", "")
+                        words = data.get("words", [])
+                        if text:
+                            print(f"\n✨ Final (with timestamps): {text}")
+                            if words:
+                                print(f"   Words: {words[:5]}...")  # Show first 5 words
                     elif message_type == "commit_throttled":
-                        # This is a warning - we're committing too frequently
-                        # Increase the minimum commit interval to back off
-                        self.min_commit_interval = min(2.0, self.min_commit_interval * 1.5)
+                        # Back off on commit frequency
+                        self.min_commit_interval = min(60.0, self.min_commit_interval * 1.5)
                         print(f"\n⚠️  Commit throttled, backing off to {self.min_commit_interval}s")
-                    elif message_type == "error":
-                        error = data.get("error", "Unknown error")
-                        print(f"\n❌ Error: {error}")
+                    elif message_type in ("error", "auth_error", "quota_exceeded", 
+                                          "transcriber_error", "input_error", "rate_limited"):
+                        error = data.get("error", data.get("message", "Unknown error"))
+                        print(f"\n❌ {message_type}: {error}")
                         print(f"   Full error data: {json.dumps(data, indent=2)}")
                     else:
-                        # Debug: print ALL unknown message types with full data
-                        print(f"\n🔍 Unknown message type: {message_type}")
-                        print(f"   Full data: {json.dumps(data, indent=2)}")
+                        # Debug: print unknown message types
+                        print(f"\n🔍 Message type '{message_type}': {json.dumps(data, indent=2)}")
                 except json.JSONDecodeError:
                     print(f"\n⚠️  Received non-JSON message: {message[:200]}")
                     
-        except websockets.exceptions.ConnectionClosed:
-            print("\n🔌 Connection closed")
+        except websockets.exceptions.ConnectionClosed as e:
+            print(f"\n🔌 Connection closed: {e}")
         except Exception as e:
             print(f"\n❌ Error receiving transcriptions: {e}")
             import traceback
@@ -164,7 +195,10 @@ class ElevenLabsRealtimeSTT:
                 return
             
             print(f"\n🎤 Streaming audio... (Press Ctrl+C to stop)")
-            print(f"   Commit interval: {self.commit_interval_chunks} chunks (~{self.commit_interval_chunks * (self.chunk_size / self.sample_rate):.2f}s)")
+            print(f"   Language: {self.language_code}")
+            print(f"   Commit strategy: {'VAD (automatic)' if self.use_vad else 'Manual'}")
+            if not self.use_vad:
+                print(f"   Commit interval: {self.commit_interval_chunks} chunks (~{self.commit_interval_chunks * (self.chunk_size / self.sample_rate):.1f}s)")
             print(f"   Sample rate: {self.sample_rate} Hz, Chunk size: {self.chunk_size} bytes\n")
             
             chunk_counter = 0
@@ -195,17 +229,16 @@ class ElevenLabsRealtimeSTT:
                     audio_array = np.frombuffer(audio_chunk, dtype=np.int16)
                     rms = np.sqrt(np.mean(np.square(audio_array.astype(np.float32))))
                     
-                    # Commit at proper intervals to accumulate at least 0.3s of audio
-                    commit = (chunk_counter > 0 and chunk_counter % self.commit_interval_chunks == 0)
-                    
                     # Print first few chunks for debugging
                     if chunk_counter < 5:
-                        print(f"📤 Chunk {chunk_counter}: {len(audio_chunk)} bytes, RMS: {rms:.0f}, commit: {commit}")
-                    elif commit:
-                        print(f"\n📤 Sending chunk {chunk_counter} with commit=True (RMS: {rms:.0f})")
+                        print(f"📤 Chunk {chunk_counter}: {len(audio_chunk)} bytes, RMS: {rms:.0f}")
                     
-                    await self.send_audio_chunk(audio_chunk, commit=commit)
+                    await self.send_audio_chunk(audio_chunk)
                     chunk_counter += 1
+                    
+                    # Manual commit at proper intervals (only if not using VAD)
+                    if not self.use_vad and chunk_counter % self.commit_interval_chunks == 0:
+                        await self.commit()
                     
                     # Print progress every 50 chunks with audio level
                     if chunk_counter % 50 == 0:

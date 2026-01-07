@@ -6,5 +6,6 @@ sounddevice==0.5.3
 websockets==15.0.1
 websocket-client==1.7.0
 numpy==2.3.3
+pyaudio==0.2.14
 # if WebM format is detected, pydub is required to convert it to PCM16
 #pydub==0.25.1
