@@ -45,6 +45,9 @@ else:
 AZURE_SILENCE_TIMEOUT_MS = int(os.getenv("SILENCE_TIMEOUT", "5000"))  # Default 5 seconds if not set
 AZURE_SILENCE_TIMEOUT_SEC = AZURE_SILENCE_TIMEOUT_MS / 1000.0
 
+# Audio chunk size to match CLI (1024 samples * 2 bytes per sample = 2048 bytes)
+AZURE_AUDIO_CHUNK_SIZE = 1024 * 2  # 2048 bytes for PCM16
+
 # Azure OpenAI connection state
 azure_openai_ws: Optional['WebSocketApp'] = None  # type: ignore
 azure_openai_thread: Optional[threading.Thread] = None
@@ -59,6 +62,8 @@ azure_silence_timer = None  # Timer for silence timeout
 azure_silence_timer_lock = threading.Lock()  # Lock for thread-safe timer operations
 azure_language = "Auto"  # Track user's language selection (for logging only - model auto-detects)
 azure_model = "gpt-4o-mini-transcribe"  # Track current model for logging
+azure_audio_buffer = bytearray()  # Buffer for accumulating audio data
+azure_audio_buffer_lock = threading.Lock()  # Lock for thread-safe buffer operations
 
 
 def reset_azure_silence_timer():
@@ -146,6 +151,10 @@ def initialize_azure_openai_connection(socketio_instance: SocketIO, language_nam
     azure_current_transcript = ""  # Reset transcript accumulator
     azure_language = language_name  # Store language for logging
     
+    # Clear audio buffer
+    with azure_audio_buffer_lock:
+        azure_audio_buffer = bytearray()
+    
     # Get Azure OpenAI credentials from environment
     api_key = os.getenv("AZURE_OPENAI_API_KEY")
     endpoint = os.getenv("AZURE_OPENAI_ENDPOINT")
@@ -193,7 +202,7 @@ def initialize_azure_openai_connection(socketio_instance: SocketIO, language_nam
     
     def on_open(ws):
         """Called when WebSocket connection is opened"""
-        global azure_session_start_time, azure_connection_open, azure_language, azure_model, azure_openai_ws
+        global azure_session_start_time, azure_connection_open, azure_language, azure_model, azure_openai_ws, azure_audio_buffer
         
         # Check if this connection is still wanted (race condition protection)
         # If azure_openai_ws is None, it means the connection was closed before it opened
@@ -207,7 +216,10 @@ def initialize_azure_openai_connection(socketio_instance: SocketIO, language_nam
         
         logger.info("Azure OpenAI WebSocket connection opened")
         azure_session_start_time = time.perf_counter()
-        azure_connection_open = True
+        
+        # Clear any buffered audio from previous sessions
+        with azure_audio_buffer_lock:
+            azure_audio_buffer = bytearray()
         
         # Log session start to performance log
         performance_logger.info(
@@ -259,6 +271,10 @@ def initialize_azure_openai_connection(socketio_instance: SocketIO, language_nam
             
             ws.send(json.dumps(session_config))
             logger.info("Azure OpenAI session configuration sent")
+            
+            # Mark connection as open AFTER config is sent successfully
+            azure_connection_open = True
+            
         except Exception as e:
             logger.error(f"Error sending session configuration: {e}")
             azure_connection_open = False
@@ -620,9 +636,9 @@ def send_audio_to_azure_openai(audio_data: bytes):
     Send audio data to Azure OpenAI WebSocket
     
     Args:
-        audio_data: Audio data in bytes (PCM16 from Web Audio API, or WebM from MediaRecorder)
+        audio_data: Audio data in bytes (PCM16 from Web Audio API)
     """
-    global azure_openai_ws, azure_last_audio_send_time, azure_connection_open
+    global azure_openai_ws, azure_last_audio_send_time, azure_connection_open, azure_audio_buffer
     
     if not azure_openai_ws:
         logger.warning("Azure OpenAI WebSocket connection is not initialized")
@@ -630,68 +646,68 @@ def send_audio_to_azure_openai(audio_data: bytes):
     
     # Check if connection is actually open
     if not azure_connection_open:
-        # This is expected during initial connection establishment - use debug level
-        logger.debug("Azure OpenAI WebSocket connection is not open yet (connection establishing)")
+        # Buffer audio while connection is establishing
+        with azure_audio_buffer_lock:
+            azure_audio_buffer.extend(audio_data)
+            if len(azure_audio_buffer) > AZURE_AUDIO_CHUNK_SIZE * 10:
+                # Prevent buffer from growing too large - keep only recent audio
+                azure_audio_buffer = azure_audio_buffer[-AZURE_AUDIO_CHUNK_SIZE * 5:]
+        logger.debug(f"Azure OpenAI connection establishing - buffered {len(audio_data)} bytes")
         return False
     
     # Double-check socket state before sending
     try:
-        # Check if sock attribute exists and is not None
         if not hasattr(azure_openai_ws, 'sock') or azure_openai_ws.sock is None:
             logger.debug("Azure OpenAI WebSocket socket is None - connection not ready")
             azure_connection_open = False
             return False
         
-        # Check if socket is connected
         if not azure_openai_ws.sock.connected:
             logger.warning("Azure OpenAI WebSocket socket is not connected")
             azure_connection_open = False
             return False
     except (AttributeError, Exception) as e:
-        # sock attribute might not exist or be accessible, or connection might be closing
         logger.debug(f"Cannot verify Azure OpenAI WebSocket socket state: {e}")
         azure_connection_open = False
         return False
     
     try:
-        # Check if data is already PCM16 (from Web Audio API) or needs conversion (WebM)
-        if is_likely_pcm16(audio_data):
-            # Data is already PCM16, use it directly
-            logger.debug(f"✅ Audio data appears to be PCM16 format ({len(audio_data)} bytes)")
-            pcm16_data = audio_data
-        else:
-            # Try to convert WebM to PCM16 (fallback for older clients)
-            logger.info(f"⚠️ Audio data appears to be WebM format, attempting conversion...")
-            pcm16_data = convert_webm_to_pcm16(audio_data)
+        # Add incoming data to buffer
+        with azure_audio_buffer_lock:
+            azure_audio_buffer.extend(audio_data)
+        
+        # Send buffered audio in chunks matching CLI behavior
+        bytes_sent = 0
+        while True:
+            with azure_audio_buffer_lock:
+                if len(azure_audio_buffer) < AZURE_AUDIO_CHUNK_SIZE:
+                    break
+                chunk = bytes(azure_audio_buffer[:AZURE_AUDIO_CHUNK_SIZE])
+                azure_audio_buffer = azure_audio_buffer[AZURE_AUDIO_CHUNK_SIZE:]
             
-            if pcm16_data is None:
-                # If conversion failed, log error and return
-                logger.error("❌ WebM to PCM16 conversion failed - cannot send audio to Azure OpenAI")
-                logger.error("💡 Tip: Make sure the frontend is using Web Audio API for Azure OpenAI")
-                return False
+            # Encode audio chunk as base64
+            audio_base64 = base64.b64encode(chunk).decode('utf-8')
+            
+            # Send audio buffer append message
+            message = {
+                "type": "input_audio_buffer.append",
+                "audio": audio_base64
+            }
+            
+            # Track when audio is sent for response time calculation
+            azure_last_audio_send_time = time.perf_counter()
+            azure_openai_ws.send(json.dumps(message))
+            bytes_sent += len(chunk)
         
-        # Encode audio data as base64
-        audio_base64 = base64.b64encode(pcm16_data).decode('utf-8')
-        
-        # Send audio buffer append message
-        message = {
-            "type": "input_audio_buffer.append",
-            "audio": audio_base64
-        }
-        
-        # Track when audio is sent for response time calculation (right before sending)
-        azure_last_audio_send_time = time.perf_counter()
-        azure_openai_ws.send(json.dumps(message))
-        #logger.info(f"📤 Audio data sent to Azure OpenAI WebSocket ({len(pcm16_data)} bytes PCM16, base64: {len(audio_base64)} chars)")
+        if bytes_sent > 0:
+            logger.debug(f"📤 Sent {bytes_sent} bytes to Azure OpenAI")
         return True
     
     except Exception as e:
         error_msg = str(e)
-        # Check if this is a connection closed error
         if "closed" in error_msg.lower() or "socket is already closed" in error_msg.lower():
             logger.warning(f"Azure OpenAI WebSocket connection is closed - cannot send audio. Error: {error_msg}")
             azure_connection_open = False
-            # Notify frontend about connection issue
             if azure_socketio:
                 azure_socketio.emit('transcription_status', {
                     'status': 'error',
@@ -705,13 +721,17 @@ def send_audio_to_azure_openai(audio_data: bytes):
 
 def close_azure_openai_connection():
     """Close Azure OpenAI WebSocket connection"""
-    global azure_openai_ws, azure_openai_thread, azure_current_transcript, azure_connection_open
+    global azure_openai_ws, azure_openai_thread, azure_current_transcript, azure_connection_open, azure_audio_buffer
     
     # Set connection_open to False first to prevent new operations
     azure_connection_open = False
     
     # Stop silence timer when manually closing connection
     stop_azure_silence_timer()
+    
+    # Clear audio buffer
+    with azure_audio_buffer_lock:
+        azure_audio_buffer = bytearray()
     
     # Save reference and clear global immediately to prevent race conditions
     ws_to_close = azure_openai_ws

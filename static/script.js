@@ -4,6 +4,8 @@ let microphone;
 let audioContext = null;
 let audioProcessor = null;
 let audioStream = null;
+let pendingAudioChunks = []; // Buffer audio while waiting for connection
+let connectionReady = false; // Track if backend connection is ready
 
 // Connect to SocketIO on the same port as the web server
 socket = io();
@@ -25,7 +27,20 @@ socket.on("transcription_status", (data) => {
   if (data.status === "error") {
     console.error("Transcription error:", data.message);
     alert(`Transcription error: ${data.message}`);
+    connectionReady = false;
+  } else if (data.status === "started") {
+    // Backend connection is ready - flush any buffered audio
+    connectionReady = true;
+    console.log(`✅ Backend connection ready. Flushing ${pendingAudioChunks.length} buffered audio chunks...`);
+    
+    // Send all buffered audio chunks
+    while (pendingAudioChunks.length > 0) {
+      const chunk = pendingAudioChunks.shift();
+      socket.emit("audio_stream", chunk);
+    }
+    console.log("✅ Buffered audio flushed");
   } else if (data.status === "stopped") {
+    connectionReady = false;
     // If recording is still active, stop it
     if (isRecording) {
       stopRecording().catch((error) =>
@@ -99,64 +114,83 @@ async function openMicrophone(microphone, socket, useWebAudio = false) {
     return new Promise((resolve) => {
       try {
         // Use default sample rate (usually 48kHz or 44.1kHz)
-        // We'll let the browser handle resampling, or resample in JS if needed
         audioContext = new (window.AudioContext || window.webkitAudioContext)();
         const actualSampleRate = audioContext.sampleRate;
         console.log(`AudioContext sample rate: ${actualSampleRate}Hz (Azure OpenAI expects 24000Hz)`);
         
         const source = audioContext.createMediaStreamSource(microphone.stream);
-        const bufferSize = 4096; // Buffer size for processing
+        
+        // Use smaller buffer size (1024) to match CLI behavior and reduce latency
+        // CLI uses CHUNK = 1024 at 24kHz, so we use 2048 at 48kHz to get similar ~1024 samples after resampling
+        const bufferSize = 2048;
         
         audioProcessor = audioContext.createScriptProcessor(bufferSize, 1, 1);
         
-        // Target sample rate for Azure OpenAI
+        // Target sample rate for Azure OpenAI (must match CLI: 24000Hz)
         const targetSampleRate = 24000;
+        
+        // Pre-calculate resampling ratio
+        const resampleRatio = targetSampleRate / actualSampleRate;
+        
+        // Audio buffer for accumulating samples to send in consistent chunks
+        let audioBuffer = new Float32Array(0);
+        const targetChunkSize = 1024; // Match CLI CHUNK size exactly
         
         audioProcessor.onaudioprocess = (event) => {
           if (!isRecording) return;
           
           const inputData = event.inputBuffer.getChannelData(0);
-          const inputSampleRate = audioContext.sampleRate;
           
-          // Improved resampling using cubic interpolation for better audio quality
-          let resampledData = inputData;
-          if (inputSampleRate !== targetSampleRate) {
-            const ratio = targetSampleRate / inputSampleRate;
-            const outputLength = Math.round(inputData.length * ratio);
+          // Resample to 24kHz using linear interpolation (simpler, less CPU, good enough for speech)
+          let resampledData;
+          if (actualSampleRate !== targetSampleRate) {
+            const outputLength = Math.floor(inputData.length * resampleRatio);
             resampledData = new Float32Array(outputLength);
             
-            // Cubic interpolation for better quality than linear
             for (let i = 0; i < outputLength; i++) {
-              const srcIndex = i / ratio;
+              const srcIndex = i / resampleRatio;
               const index = Math.floor(srcIndex);
               const frac = srcIndex - index;
               
-              // Get 4 points for cubic interpolation (with boundary checks)
-              const y0 = inputData[Math.max(0, index - 1)] || 0;
-              const y1 = inputData[index] || 0;
-              const y2 = inputData[Math.min(inputData.length - 1, index + 1)] || 0;
-              const y3 = inputData[Math.min(inputData.length - 1, index + 2)] || 0;
-              
-              // Catmull-Rom spline interpolation (smoother than linear)
-              const c0 = y1;
-              const c1 = 0.5 * (y2 - y0);
-              const c2 = y0 - 2.5 * y1 + 2 * y2 - 0.5 * y3;
-              const c3 = 0.5 * (y3 - y0) + 1.5 * (y1 - y2);
-              
-              resampledData[i] = c0 + c1 * frac + c2 * frac * frac + c3 * frac * frac * frac;
+              const sample1 = inputData[index] || 0;
+              const sample2 = inputData[Math.min(inputData.length - 1, index + 1)] || 0;
+              resampledData[i] = sample1 + frac * (sample2 - sample1);
+            }
+          } else {
+            resampledData = inputData;
+          }
+          
+          // Append to buffer
+          const newBuffer = new Float32Array(audioBuffer.length + resampledData.length);
+          newBuffer.set(audioBuffer);
+          newBuffer.set(resampledData, audioBuffer.length);
+          audioBuffer = newBuffer;
+          
+          // Send chunks of exactly targetChunkSize (1024 samples) to match CLI behavior
+          while (audioBuffer.length >= targetChunkSize) {
+            const chunk = audioBuffer.slice(0, targetChunkSize);
+            audioBuffer = audioBuffer.slice(targetChunkSize);
+            
+            // Convert Float32Array to Int16Array (PCM16)
+            const pcm16Data = new Int16Array(chunk.length);
+            for (let i = 0; i < chunk.length; i++) {
+              const s = Math.max(-1, Math.min(1, chunk[i]));
+              pcm16Data[i] = s < 0 ? s * 0x8000 : s * 0x7FFF;
+            }
+            
+            // If connection is ready, send immediately; otherwise buffer
+            if (connectionReady) {
+              socket.emit("audio_stream", pcm16Data.buffer);
+            } else {
+              // Buffer audio while waiting for connection (keep up to 5 seconds of audio)
+              pendingAudioChunks.push(pcm16Data.buffer);
+              // Limit buffer size to ~5 seconds (24000 samples/sec / 1024 samples/chunk * 5 sec = ~117 chunks)
+              const maxChunks = 120;
+              if (pendingAudioChunks.length > maxChunks) {
+                pendingAudioChunks.shift(); // Remove oldest chunk
+              }
             }
           }
-          
-          // Convert Float32Array to Int16Array (PCM16)
-          const pcm16Data = new Int16Array(resampledData.length);
-          for (let i = 0; i < resampledData.length; i++) {
-            // Clamp and convert to 16-bit integer
-            const s = Math.max(-1, Math.min(1, resampledData[i]));
-            pcm16Data[i] = s < 0 ? s * 0x8000 : s * 0x7FFF;
-          }
-          
-          // Send PCM16 data as ArrayBuffer
-          socket.emit("audio_stream", pcm16Data.buffer);
         };
         
         source.connect(audioProcessor);
@@ -166,7 +200,7 @@ async function openMicrophone(microphone, socket, useWebAudio = false) {
         audioProcessor.connect(gainNode);
         gainNode.connect(audioContext.destination);
         
-        console.log("Client: Web Audio API microphone opened (PCM16)");
+        console.log("Client: Web Audio API microphone opened (PCM16, chunk size: 1024 samples at 24kHz)");
         document.body.classList.add("recording");
         const micButton = document.getElementById("micButton");
         const languageSelect = document.getElementById("languageSelect");
@@ -206,12 +240,20 @@ async function openMicrophone(microphone, socket, useWebAudio = false) {
 
 async function startRecording() {
   isRecording = true;
+  connectionReady = false; // Reset connection state
+  pendingAudioChunks = []; // Clear any old buffered audio
+  
   const searchInput = document.getElementById("searchInput");
   searchInput.value = ""; // Clear the input when starting a new recording
   
   // Check which API is selected to determine audio capture method
   const apiSelect = document.getElementById("apiSelect");
   const useWebAudio = apiSelect.value === "Azure OpenAI"; // Use Web Audio API for Azure OpenAI
+  
+  // For non-Azure APIs, mark connection as ready immediately (they don't need buffering)
+  if (!useWebAudio) {
+    connectionReady = true;
+  }
   
   microphone = await getMicrophone(useWebAudio);
   console.log(`Client: Waiting to open microphone (${useWebAudio ? 'Web Audio API' : 'MediaRecorder'})`);
@@ -244,6 +286,8 @@ async function stopRecording() {
     
     microphone = null;
     isRecording = false;
+    connectionReady = false;
+    pendingAudioChunks = []; // Clear buffered audio
     console.log("Client: Microphone closed");
     document.body.classList.remove("recording");
     const micButton = document.getElementById("micButton");
