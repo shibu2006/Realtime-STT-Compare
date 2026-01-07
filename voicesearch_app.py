@@ -41,6 +41,74 @@ except ImportError as e:
     logging.warning(f"Azure OpenAI handler not available: {e}")
     AZURE_OPENAI_AVAILABLE = False
 
+# Import ElevenLabs handler
+# Define stub functions first to satisfy type checker
+def initialize_elevenlabs_connection(socketio_instance: SocketIO, language_name: str = "Auto") -> bool:
+    """Stub function - will be replaced if import succeeds"""
+    return False
+
+def send_audio_to_elevenlabs(audio_data: bytes) -> bool:
+    """Stub function - will be replaced if import succeeds"""
+    return False
+
+def close_elevenlabs_connection() -> None:
+    """Stub function - will be replaced if import succeeds"""
+    pass
+
+try:
+    from elevenlabs_handler import (
+        initialize_elevenlabs_connection as _init_elevenlabs,
+        send_audio_to_elevenlabs as _send_elevenlabs,
+        close_elevenlabs_connection as _close_elevenlabs
+    )
+    # Replace stub functions with real ones
+    initialize_elevenlabs_connection = _init_elevenlabs
+    send_audio_to_elevenlabs = _send_elevenlabs
+    close_elevenlabs_connection = _close_elevenlabs
+    ELEVENLABS_AVAILABLE = True
+except ImportError as e:
+    logging.warning(f"ElevenLabs handler not available: {e}")
+    ELEVENLABS_AVAILABLE = False
+
+
+def resample_audio_24k_to_16k(audio_bytes: bytes) -> bytes:
+    """
+    Resample PCM16 audio from 24kHz to 16kHz for ElevenLabs
+    Uses simple linear interpolation for downsampling
+    
+    Args:
+        audio_bytes: PCM16 audio data at 24kHz
+    
+    Returns:
+        PCM16 audio data at 16kHz
+    """
+    import struct
+    
+    # Convert bytes to int16 samples
+    num_samples = len(audio_bytes) // 2
+    samples = struct.unpack(f'<{num_samples}h', audio_bytes)
+    
+    # Resample ratio: 16000/24000 = 2/3
+    output_length = int(num_samples * 16000 / 24000)
+    resampled = []
+    
+    for i in range(output_length):
+        src_index = i * 24000 / 16000
+        index = int(src_index)
+        frac = src_index - index
+        
+        sample1 = samples[index] if index < num_samples else 0
+        sample2 = samples[min(num_samples - 1, index + 1)] if index + 1 < num_samples else sample1
+        
+        # Linear interpolation
+        value = int(sample1 + frac * (sample2 - sample1))
+        # Clamp to int16 range
+        value = max(-32768, min(32767, value))
+        resampled.append(value)
+    
+    # Convert back to bytes
+    return struct.pack(f'<{len(resampled)}h', *resampled)
+
 if TYPE_CHECKING:
     from deepgram.clients import LiveClient
 
@@ -50,7 +118,7 @@ load_dotenv()
 # Configure logging
 logging.basicConfig(
     level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    format='%(asctime)s - %(name)s - %(levelname)s - %(filename)s:%(lineno)d - %(message)s',
     handlers=[
         logging.FileHandler('voicesearch_app.log'),
         logging.StreamHandler()  # Also log to console
@@ -63,7 +131,7 @@ logger = logging.getLogger(__name__)
 performance_logger = logging.getLogger('performance')
 performance_logger.setLevel(logging.INFO)
 performance_handler = logging.FileHandler('voicesearch_performance.log')
-performance_formatter = logging.Formatter('%(asctime)s - %(message)s')
+performance_formatter = logging.Formatter('%(asctime)s - %(filename)s:%(lineno)d - %(message)s')
 performance_handler.setFormatter(performance_formatter)
 performance_logger.addHandler(performance_handler)
 performance_logger.propagate = False  # Don't propagate to root logger
@@ -265,7 +333,7 @@ def initialize_deepgram_connection(language_name="English"):
                 f"Text: \"{transcript}\""
             )
             
-            logger.debug(f"Received transcript: {transcript}")
+            logger.info(f"Deepgram received transcript: {transcript}")
             socketio.emit('transcription_update', {'transcription': transcript})
 
     def on_close(self, close, **kwargs):
@@ -362,9 +430,7 @@ def handle_audio_stream(data):
     # Route audio to appropriate API based on current provider
     if current_api_provider == "Azure OpenAI":
         if AZURE_OPENAI_AVAILABLE:
-            # Note: Azure OpenAI expects PCM16 format, but browser sends WebM
-            # For now, we'll send the raw bytes - conversion may be needed
-            #logger.info(f"📤 Sending audio to Azure OpenAI: {len(audio_bytes)} bytes")
+            # Note: Azure OpenAI expects PCM16 format at 24kHz
             success = send_audio_to_azure_openai(audio_bytes)
             if success:
                 logger.debug(f"✅ Audio stream data sent to Azure OpenAI ({len(audio_bytes)} bytes)")
@@ -374,8 +440,17 @@ def handle_audio_stream(data):
         else:
             logger.warning("Audio stream received but Azure OpenAI is not available")
     elif current_api_provider == "ElvenLabs ScribeV2":
-        # TODO: Implement ElvenLabs ScribeV2 audio handling
-        logger.warning("ElvenLabs ScribeV2 audio handling not yet implemented")
+        if ELEVENLABS_AVAILABLE:
+            # ElevenLabs expects PCM16 format at 16kHz - need to resample from 24kHz
+            # The browser sends 24kHz, ElevenLabs needs 16kHz
+            resampled_audio = resample_audio_24k_to_16k(audio_bytes)
+            success = send_audio_to_elevenlabs(resampled_audio)
+            if success:
+                logger.debug(f"✅ Audio stream data sent to ElevenLabs ({len(resampled_audio)} bytes)")
+            else:
+                logger.debug(f"⏳ Audio not sent yet - ElevenLabs connection establishing ({len(audio_bytes)} bytes)")
+        else:
+            logger.warning("Audio stream received but ElevenLabs is not available")
     else:  # Default to Deepgram API
         if dg_connection:
             try:
@@ -418,12 +493,31 @@ def handle_toggle_transcription(data):
                     'message': 'Failed to start Azure OpenAI connection'
                 })
         elif api_provider == "ElvenLabs ScribeV2":
-            # TODO: Implement ElvenLabs ScribeV2 integration
-            logger.warning("ElvenLabs ScribeV2 not yet implemented")
-            socketio.emit('transcription_status', {
-                'status': 'error',
-                'message': 'ElvenLabs ScribeV2 is not yet implemented'
-            })
+            if not ELEVENLABS_AVAILABLE:
+                socketio.emit('transcription_status', {
+                    'status': 'error',
+                    'message': 'ElevenLabs handler not available. Please check dependencies (pip install websockets).'
+                })
+                return
+            
+            # Check for API key
+            if not os.getenv("ELEVENLABS_API_KEY"):
+                socketio.emit('transcription_status', {
+                    'status': 'error',
+                    'message': 'ELEVENLABS_API_KEY environment variable is not set'
+                })
+                return
+            
+            logger.info(f"Starting ElevenLabs connection with language: {language_name}")
+            success = initialize_elevenlabs_connection(socketio, language_name)
+            if success:
+                # Note: transcription_status 'started' is emitted by the handler when session starts
+                logger.info("ElevenLabs connection initialization started")
+            else:
+                socketio.emit('transcription_status', {
+                    'status': 'error',
+                    'message': 'Failed to start ElevenLabs connection'
+                })
         else:  # Default to Deepgram API
             if not API_KEY:
                 socketio.emit('transcription_status', {
@@ -445,8 +539,9 @@ def handle_toggle_transcription(data):
             close_azure_openai_connection()
             socketio.emit('transcription_status', {'status': 'stopped'})
         elif api_provider == "ElvenLabs ScribeV2":
-            # TODO: Implement ElvenLabs ScribeV2 stop
-            logger.warning("ElvenLabs ScribeV2 stop not yet implemented")
+            logger.info("Stopping ElevenLabs connection")
+            if ELEVENLABS_AVAILABLE:
+                close_elevenlabs_connection()
             socketio.emit('transcription_status', {'status': 'stopped'})
         else:  # Default to Deepgram API
             logger.info("Stopping Deepgram connection")
@@ -487,6 +582,14 @@ def server_disconnect():
             logger.info('Closed Azure OpenAI connection on client disconnect')
         except Exception as e:
             logger.error(f"Error closing Azure OpenAI connection on disconnect: {e}")
+    
+    # Clean up ElevenLabs connection
+    if ELEVENLABS_AVAILABLE:
+        try:
+            close_elevenlabs_connection()
+            logger.info('Closed ElevenLabs connection on client disconnect')
+        except Exception as e:
+            logger.error(f"Error closing ElevenLabs connection on disconnect: {e}")
 
 @socketio.on('restart_deepgram')
 def restart_deepgram(data):

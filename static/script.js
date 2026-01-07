@@ -248,7 +248,7 @@ async function startRecording() {
   
   // Check which API is selected to determine audio capture method
   const apiSelect = document.getElementById("apiSelect");
-  const useWebAudio = apiSelect.value === "Azure OpenAI"; // Use Web Audio API for Azure OpenAI
+  const useWebAudio = apiSelect.value === "Azure OpenAI" || apiSelect.value === "ElvenLabs ScribeV2"; // Use Web Audio API for Azure OpenAI and ElevenLabs
   
   // For non-Azure APIs, mark connection as ready immediately (they don't need buffering)
   if (!useWebAudio) {

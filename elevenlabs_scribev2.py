@@ -12,8 +12,8 @@ from dotenv import load_dotenv
 
 class ElevenLabsRealtimeSTT:
     """Real-time Speech-to-Text using ElevenLabs Scribe v2 Realtime"""
-    
-    def __init__(self, api_key: str, model_id: str = "scribe_v2_realtime", use_vad: bool = True, language_code: str = "en"):
+
+    def __init__(self, api_key: str, model_id: str = "scribe_v2_realtime", use_vad: bool = True, language_code: Optional[str] = None):
         self.api_key = api_key
         self.model_id = model_id
         self.use_vad = use_vad
@@ -26,8 +26,10 @@ class ElevenLabsRealtimeSTT:
             f"?model_id={model_id}"
             f"&audio_format=pcm_16000"
             f"&commit_strategy={commit_strategy}"
-            f"&language_code={language_code}"
         )
+        # Only add language_code if specified (omit for auto-detection)
+        if language_code:
+            self.ws_url += f"&language_code={language_code}"
         if use_vad:
             # VAD parameters for automatic speech detection
             self.ws_url += "&vad_silence_threshold_secs=1.0&vad_threshold=0.5"
