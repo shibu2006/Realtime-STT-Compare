@@ -15,43 +15,49 @@
       crossorigin="anonymous"
     ></script>
   </head>
-  <body class="">
+  <body>
     <div class="container">
       <h1 class="app-title">
         <span class="title-voice">Voice</span><span class="title-search">Transcribe</span>
       </h1>
       
-      <div class="api-container">
-        <label for="apiSelect" class="api-label">Realtime STT via :</label>
-        <select id="apiSelect" class="api-select">
-          <option value="Deepgram API" selected>Deepgram API</option>
-          <option value="Azure OpenAI">Azure OpenAI</option>
-          <option value="ElvenLabs ScribeV2">ElevenLabs ScribeV2</option>
-        </select>
-      </div>
-      
-      <div class="language-container">
-        <label for="languageSelect" class="language-label">Language:</label>
-        <select id="languageSelect" class="language-select">
-          <option value="Auto">Auto</option>
-          <option value="Chinese">Chinese</option>
-          <option value="Danish">Danish</option>
-          <option value="Dutch">Dutch</option>
-          <option value="English" selected>English</option>
-          <option value="Finnish">Finnish</option>
-          <option value="French">French</option>
-          <option value="German">German</option>
-          <option value="Hindi">Hindi</option>
-          <option value="Hindi-English">Hinglish</option>
-          <option value="Italian">Italian</option>
-          <option value="Japanese">Japanese</option>
-          <option value="Korean">Korean</option>
-          <option value="Norwegian">Norwegian</option>
-          <option value="Portuguese">Portuguese</option>
-          <option value="Russian">Russian</option>
-          <option value="Spanish">Spanish</option>
-          <option value="Swedish">Swedish</option>
-        </select>
+      <div class="settings-group">
+        <div class="control-wrapper">
+          <label for="apiSelect" class="control-label">Provider</label>
+          <div class="styled-select-wrapper">
+            <select id="apiSelect" class="api-select">
+              <option value="Deepgram API" selected>Deepgram API</option>
+              <option value="Azure OpenAI">Azure OpenAI</option>
+              <option value="ElvenLabs ScribeV2">ElevenLabs ScribeV2</option>
+            </select>
+          </div>
+        </div>
+        
+        <div class="control-wrapper">
+          <label for="languageSelect" class="control-label">Language</label>
+          <div class="styled-select-wrapper">
+            <select id="languageSelect" class="language-select">
+              <option value="Auto">Auto</option>
+              <option value="Chinese">Chinese</option>
+              <option value="Danish">Danish</option>
+              <option value="Dutch">Dutch</option>
+              <option value="English" selected>English</option>
+              <option value="Finnish">Finnish</option>
+              <option value="French">French</option>
+              <option value="German">German</option>
+              <option value="Hindi">Hindi</option>
+              <option value="Hindi-English">Hinglish</option>
+              <option value="Italian">Italian</option>
+              <option value="Japanese">Japanese</option>
+              <option value="Korean">Korean</option>
+              <option value="Norwegian">Norwegian</option>
+              <option value="Portuguese">Portuguese</option>
+              <option value="Russian">Russian</option>
+              <option value="Spanish">Spanish</option>
+              <option value="Swedish">Swedish</option>
+            </select>
+          </div>
+        </div>
       </div>
       
       <div class="search-container">
@@ -62,6 +68,7 @@
             id="searchInput" 
             class="search-input" 
             placeholder="Search the web or hold microphone to speak..."
+            autocomplete="off"
           />
           <button id="micButton" class="mic-icon-button" title="Hold to speak (or press and hold spacebar)">
             <i class="fas fa-microphone mic-icon"></i>
@@ -71,7 +78,7 @@
       </div>
     </div>
     
-    <input type="checkbox" id="record" class="mic-checkbox" style="display: none;" />
+    <input type="checkbox" id="record" class="mic-checkbox" />
     <script src="../static/script.js"></script>
   </body>
 </html>
