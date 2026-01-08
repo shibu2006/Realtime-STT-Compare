@@ -80,16 +80,32 @@ VoiceTranscribe is a Flask-based web application that provides real-time **S**pe
 
 ### Option 1: Using the Startup Script (Recommended)
 
-**Start locally:**
+**Start in background (daemon mode):**
 ```bash
-./start.sh
+./start.sh start
 ```
 
-**Start with ngrok (public URL):**
+**Start in background with ngrok (public URL):**
 ```bash
-./start.sh --ngrok
+./start.sh start --ngrok
 # or
-./start.sh -n
+./start.sh start -n
+```
+
+**Check status:**
+```bash
+./start.sh status
+```
+
+**Stop the application:**
+```bash
+./start.sh stop
+```
+
+**Legacy foreground mode (deprecated):**
+```bash
+./start.sh              # Start locally in foreground
+./start.sh --ngrok       # Start with ngrok in foreground
 ```
 
 **Show help:**
@@ -103,8 +119,16 @@ The startup script will:
 - Install requirements if needed
 - Validate `.env` file
 - Start ngrok tunnel (if requested)
-- Start the Flask application
+- Start the Flask application in background
 - Display connection URLs
+- Save process IDs for management
+
+**Background Mode Features:**
+- Runs as a daemon process
+- Logs output to `voicesearch_app.log`
+- Process management with PID files
+- Start/stop/status commands
+- Automatic cleanup on stop
 
 ### Option 2: Manual Start
 
