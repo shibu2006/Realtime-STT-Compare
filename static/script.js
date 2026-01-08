@@ -17,6 +17,90 @@ let speechDetectedInSession = false; // Flag to track if user spoke in current s
 const SPEECH_THRESHOLD = 0.02; // Volume threshold to consider as speech (0.0 to 1.0)
 const SERVICE_TIMEOUT_MS = 1000; // 1 second timeout as requested
 
+// Recent Transcriptions - localStorage key and max items
+const RECENT_TRANSCRIPTIONS_KEY = 'voiceTranscribe_recentTranscriptions';
+const MAX_RECENT_ITEMS = 10;
+
+// Load recent transcriptions from localStorage
+function getRecentTranscriptions() {
+  try {
+    const stored = localStorage.getItem(RECENT_TRANSCRIPTIONS_KEY);
+    return stored ? JSON.parse(stored) : [];
+  } catch (e) {
+    console.error('Error loading recent transcriptions:', e);
+    return [];
+  }
+}
+
+// Save recent transcriptions to localStorage
+function saveRecentTranscriptions(items) {
+  try {
+    localStorage.setItem(RECENT_TRANSCRIPTIONS_KEY, JSON.stringify(items));
+  } catch (e) {
+    console.error('Error saving recent transcriptions:', e);
+  }
+}
+
+// Add a new transcription to recent list
+function addRecentTranscription(text) {
+  if (!text || text.trim().length === 0) return;
+  
+  const trimmedText = text.trim();
+  let recent = getRecentTranscriptions();
+  
+  // Remove duplicate if exists
+  recent = recent.filter(item => item.toLowerCase() !== trimmedText.toLowerCase());
+  
+  // Add to beginning
+  recent.unshift(trimmedText);
+  
+  // Keep only max items
+  if (recent.length > MAX_RECENT_ITEMS) {
+    recent = recent.slice(0, MAX_RECENT_ITEMS);
+  }
+  
+  saveRecentTranscriptions(recent);
+  renderRecentTranscriptions();
+}
+
+// Clear all recent transcriptions
+function clearRecentTranscriptions() {
+  saveRecentTranscriptions([]);
+  renderRecentTranscriptions();
+}
+
+// Render recent transcriptions in the UI
+function renderRecentTranscriptions() {
+  const container = document.getElementById('recentItems');
+  const section = document.getElementById('recentSection');
+  
+  if (!container || !section) return;
+  
+  const recent = getRecentTranscriptions();
+  
+  if (recent.length === 0) {
+    section.style.display = 'none';
+    return;
+  }
+  
+  section.style.display = 'block';
+  container.innerHTML = '';
+  
+  recent.forEach((text) => {
+    const item = document.createElement('button');
+    item.className = 'recent-item';
+    item.textContent = `"${text}"`;
+    item.addEventListener('click', () => {
+      const searchInput = document.getElementById('searchInput');
+      if (searchInput) {
+        searchInput.value = text;
+        searchInput.focus();
+      }
+    });
+    container.appendChild(item);
+  });
+}
+
 // Connect to SocketIO on the same port as the web server
 socket = io();
 
@@ -511,6 +595,11 @@ const stopRecordingHandler = () => {
     const apiSelect = document.getElementById("apiSelect");
     const selectedAPI = apiSelect ? apiSelect.value : "Deepgram API";
 
+    // Save transcription to recent list before stopping
+    if (currentTranscription && currentTranscription.trim().length > 0) {
+      addRecentTranscription(currentTranscription);
+    }
+
     if (socket.connected) {
       socket.emit("toggle_transcription", {
         action: "stop",
@@ -632,4 +721,13 @@ document.addEventListener("DOMContentLoaded", () => {
       searchButton.click();
     }
   });
+
+  // Initialize recent transcriptions
+  renderRecentTranscriptions();
+
+  // Clear all button handler
+  const clearAllBtn = document.getElementById('clearAllBtn');
+  if (clearAllBtn) {
+    clearAllBtn.addEventListener('click', clearRecentTranscriptions);
+  }
 });
