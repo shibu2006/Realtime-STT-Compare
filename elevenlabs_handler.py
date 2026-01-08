@@ -1,7 +1,7 @@
 """
 ElevenLabs Scribe V2 Realtime API Handler
 Handles WebSocket connections and audio transcription using ElevenLabs Scribe v2 Realtime API
-Based on the working elevenlabs_scribev2.py implementation
+Updated to support per-session isolation for multiple concurrent users
 """
 import os
 import json
@@ -10,7 +10,7 @@ import logging
 import threading
 import time
 import asyncio
-from typing import Optional, TYPE_CHECKING
+from typing import Optional, TYPE_CHECKING, Dict
 from flask_socketio import SocketIO
 
 logger = logging.getLogger(__name__)
@@ -41,147 +41,165 @@ ELEVENLABS_SILENCE_TIMEOUT_SEC = ELEVENLABS_SILENCE_TIMEOUT_MS / 1000.0
 ELEVENLABS_SAMPLE_RATE = 16000  # 16kHz for pcm_16000 format
 ELEVENLABS_AUDIO_CHUNK_SIZE = 4096  # Match the working implementation
 
-# ElevenLabs connection state
-elevenlabs_ws = None
-elevenlabs_thread: Optional[threading.Thread] = None
-elevenlabs_session_start_time = None
-elevenlabs_transcription_count = 0
-elevenlabs_last_transcription_time = None
-elevenlabs_last_audio_send_time = None
-elevenlabs_socketio: Optional[SocketIO] = None
-elevenlabs_current_transcript = ""
-elevenlabs_connection_open = False
-elevenlabs_session_started = threading.Event()
-elevenlabs_silence_timer = None
-elevenlabs_silence_timer_lock = threading.Lock()
-elevenlabs_language = "Auto"
-elevenlabs_audio_buffer = bytearray()
-elevenlabs_audio_buffer_lock = threading.Lock()
-elevenlabs_stop_event = threading.Event()
+# Session storage for ElevenLabs connections - each session gets isolated state
+elevenlabs_sessions: Dict[str, 'ElevenLabsSession'] = {}
+elevenlabs_sessions_lock = threading.Lock()
 
+class ElevenLabsSession:
+    def __init__(self, session_id: str, socketio: SocketIO):
+        self.session_id = session_id
+        self.socketio = socketio
+        self.ws = None
+        self.thread: Optional[threading.Thread] = None
+        self.session_start_time = None
+        self.transcription_count = 0
+        self.last_transcription_time = None
+        self.last_audio_send_time = None
+        self.current_transcript = ""
+        self.connection_open = False
+        self.session_started = threading.Event()
+        self.silence_timer = None
+        self.language = "Auto"
+        self.audio_buffer = bytearray()
+        self.audio_buffer_lock = threading.Lock()
+        self.stop_event = threading.Event()
+        
+    def reset_performance_metrics(self):
+        """Reset performance tracking for new session"""
+        self.session_start_time = time.perf_counter()
+        self.transcription_count = 0
+        self.last_transcription_time = None
+        self.last_audio_send_time = None
+        self.current_transcript = ""
 
-def reset_elevenlabs_silence_timer():
+def get_elevenlabs_session(session_id: str, socketio: SocketIO) -> ElevenLabsSession:
+    """Get or create ElevenLabs session for user"""
+    with elevenlabs_sessions_lock:
+        if session_id not in elevenlabs_sessions:
+            elevenlabs_sessions[session_id] = ElevenLabsSession(session_id, socketio)
+        return elevenlabs_sessions[session_id]
+
+def cleanup_elevenlabs_session(session_id: str):
+    """Clean up ElevenLabs session on disconnect"""
+    with elevenlabs_sessions_lock:
+        if session_id in elevenlabs_sessions:
+            session = elevenlabs_sessions[session_id]
+            # Clean up any active connections
+            if session.silence_timer:
+                session.silence_timer.cancel()
+            session.stop_event.set()
+            if session.ws:
+                try:
+                    session.ws.close()
+                except Exception as e:
+                    logger.error(f"Error closing ElevenLabs connection for session {session_id}: {e}")
+            del elevenlabs_sessions[session_id]
+
+def reset_elevenlabs_silence_timer(session: ElevenLabsSession):
     """Reset the silence timeout timer when transcription is received"""
-    global elevenlabs_silence_timer
-    with elevenlabs_silence_timer_lock:
-        if elevenlabs_silence_timer:
-            elevenlabs_silence_timer.cancel()
-        elevenlabs_silence_timer = threading.Timer(ELEVENLABS_SILENCE_TIMEOUT_SEC, handle_elevenlabs_silence_timeout)
-        elevenlabs_silence_timer.start()
+    if session.silence_timer:
+        session.silence_timer.cancel()
+    session.silence_timer = threading.Timer(ELEVENLABS_SILENCE_TIMEOUT_SEC, lambda: handle_elevenlabs_silence_timeout(session))
+    session.silence_timer.start()
 
-
-def stop_elevenlabs_silence_timer():
+def stop_elevenlabs_silence_timer(session: ElevenLabsSession):
     """Stop the silence timeout timer"""
-    global elevenlabs_silence_timer
-    with elevenlabs_silence_timer_lock:
-        if elevenlabs_silence_timer:
-            elevenlabs_silence_timer.cancel()
-            elevenlabs_silence_timer = None
+    if session.silence_timer:
+        session.silence_timer.cancel()
+        session.silence_timer = None
 
-
-def handle_elevenlabs_silence_timeout():
-    """Handle silence timeout - automatically stop transcription"""
-    global elevenlabs_ws, elevenlabs_session_start_time, elevenlabs_transcription_count
-    global elevenlabs_last_transcription_time, elevenlabs_last_audio_send_time, elevenlabs_current_transcript
-    global elevenlabs_connection_open, elevenlabs_socketio
-    
-    logger.info(f"ElevenLabs silence timeout reached ({ELEVENLABS_SILENCE_TIMEOUT_MS}ms). Stopping transcription automatically.")
-    performance_logger.info(f"SILENCE_TIMEOUT | Timeout: {ELEVENLABS_SILENCE_TIMEOUT_MS}ms")
+def handle_elevenlabs_silence_timeout(session: ElevenLabsSession):
+    """Handle silence timeout - automatically stop transcription for specific session"""
+    logger.info(f"ElevenLabs silence timeout reached ({ELEVENLABS_SILENCE_TIMEOUT_MS}ms) for session {session.session_id}. Stopping transcription automatically.")
+    performance_logger.info(f"SILENCE_TIMEOUT | Session: {session.session_id} | Timeout: {ELEVENLABS_SILENCE_TIMEOUT_MS}ms")
     
     # Close the WebSocket connection
-    elevenlabs_connection_open = False
-    elevenlabs_stop_event.set()
+    session.connection_open = False
+    session.stop_event.set()
     
-    if elevenlabs_ws:
+    if session.ws:
         try:
-            elevenlabs_ws.close()
-            logger.info("ElevenLabs connection closed due to silence timeout")
+            session.ws.close()
+            logger.info(f"ElevenLabs connection closed due to silence timeout for session {session.session_id}")
         except Exception as e:
-            logger.error(f"Error closing ElevenLabs connection on timeout: {e}")
-        elevenlabs_ws = None
+            logger.error(f"Error closing ElevenLabs connection on timeout for session {session.session_id}: {e}")
+        session.ws = None
     
     # Clean up session tracking
-    if elevenlabs_session_start_time:
-        session_duration_ms = (time.perf_counter() - elevenlabs_session_start_time) * 1000
+    if session.session_start_time:
+        session_duration_ms = (time.perf_counter() - session.session_start_time) * 1000
         logger.info(
-            f"ElevenLabs session ended | Duration: {session_duration_ms:.2f}ms | "
-            f"TotalTranscriptions: {elevenlabs_transcription_count} | Reason: SilenceTimeout"
+            f"ElevenLabs session ended | Session: {session.session_id} | Duration: {session_duration_ms:.2f}ms | "
+            f"TotalTranscriptions: {session.transcription_count} | Reason: SilenceTimeout"
         )
         performance_logger.info(
-            f"SESSION_END | TotalDuration: {session_duration_ms:.2f}ms | "
-            f"TotalTranscriptions: {elevenlabs_transcription_count} | Reason: SilenceTimeout"
+            f"SESSION_END | Session: {session.session_id} | TotalDuration: {session_duration_ms:.2f}ms | "
+            f"TotalTranscriptions: {session.transcription_count} | Reason: SilenceTimeout"
         )
-        elevenlabs_session_start_time = None
-        elevenlabs_transcription_count = 0
-        elevenlabs_last_transcription_time = None
-        elevenlabs_last_audio_send_time = None
-        elevenlabs_current_transcript = ""
+        session.session_start_time = None
+        session.transcription_count = 0
+        session.last_transcription_time = None
+        session.last_audio_send_time = None
+        session.current_transcript = ""
     
-    # Notify frontend to stop recording
-    if elevenlabs_socketio:
-        elevenlabs_socketio.emit('silence_timeout', {
-            'message': f'Recording stopped due to {ELEVENLABS_SILENCE_TIMEOUT_MS}ms silence timeout',
-            'api': 'ElevenLabs ScribeV2'
-        })
+    # Notify ONLY this specific user to stop recording
+    session.socketio.emit('silence_timeout', {
+        'message': f'Recording stopped due to {ELEVENLABS_SILENCE_TIMEOUT_MS}ms silence timeout',
+        'api': 'ElevenLabs ScribeV2'
+    }, room=session.session_id)
     
-    stop_elevenlabs_silence_timer()
+    stop_elevenlabs_silence_timer(session)
 
-
-def initialize_elevenlabs_connection(socketio_instance: SocketIO, language_name: str = "Auto"):
+def initialize_elevenlabs_connection(socketio_instance: SocketIO, language_name: str = "Auto", session_id: str = None):
     """
     Initialize ElevenLabs Scribe V2 WebSocket connection
     
     Args:
         socketio_instance: Flask-SocketIO instance for emitting events
         language_name: Language for transcription. "Auto" for auto-detection.
+        session_id: Session ID for user isolation
     
     Returns:
         bool: True if connection initialization started successfully
     """
-    global elevenlabs_ws, elevenlabs_thread, elevenlabs_session_start_time
-    global elevenlabs_transcription_count, elevenlabs_last_transcription_time, elevenlabs_last_audio_send_time
-    global elevenlabs_socketio, elevenlabs_current_transcript, elevenlabs_connection_open
-    global elevenlabs_language, elevenlabs_audio_buffer, elevenlabs_session_started, elevenlabs_stop_event
-    
     if not WEBSOCKETS_AVAILABLE:
         logger.error("websockets library not available - cannot initialize ElevenLabs connection")
         return False
+        
+    if not session_id:
+        logger.error("Session ID is required for ElevenLabs connection")
+        return False
     
-    elevenlabs_socketio = socketio_instance
-    elevenlabs_current_transcript = ""
-    elevenlabs_language = language_name
-    elevenlabs_session_started.clear()
-    elevenlabs_stop_event.clear()
+    session = get_elevenlabs_session(session_id, socketio_instance)
+    session.language = language_name
+    session.session_started.clear()
+    session.stop_event.clear()
     
     # Clear audio buffer
-    with elevenlabs_audio_buffer_lock:
-        elevenlabs_audio_buffer = bytearray()
+    with session.audio_buffer_lock:
+        session.audio_buffer = bytearray()
     
     # Get ElevenLabs API key from environment
     api_key = os.getenv("ELEVENLABS_API_KEY")
     if not api_key:
-        logger.error("ELEVENLABS_API_KEY environment variable is not set")
+        logger.error(f"ELEVENLABS_API_KEY environment variable is not set for session {session.session_id}")
         return False
     
     # Close existing connection if any
-    if elevenlabs_ws:
+    if session.ws:
         try:
-            logger.info("Closing existing ElevenLabs connection")
-            elevenlabs_ws.close()
+            logger.info(f"Closing existing ElevenLabs connection for session {session.session_id}")
+            session.ws.close()
         except Exception as e:
-            logger.warning(f"Error closing existing ElevenLabs connection: {e}")
-        elevenlabs_ws = None
+            logger.warning(f"Error closing existing ElevenLabs connection for session {session.session_id}: {e}")
+        session.ws = None
     
     # Stop any existing silence timer
-    stop_elevenlabs_silence_timer()
+    stop_elevenlabs_silence_timer(session)
     
     # Reset session tracking
-    elevenlabs_session_start_time = time.perf_counter()
-    elevenlabs_transcription_count = 0
-    elevenlabs_last_transcription_time = None
-    elevenlabs_last_audio_send_time = None
-    elevenlabs_current_transcript = ""
-    elevenlabs_connection_open = False
+    session.reset_performance_metrics()
+    session.connection_open = False
     
     # Build WebSocket URL with proper query parameters
     model_id = "scribe_v2_realtime"
@@ -207,138 +225,126 @@ def initialize_elevenlabs_connection(socketio_instance: SocketIO, language_name:
         if lang_code:
             ws_url += f"&language_code={lang_code}"
     
-    logger.info(f"Initializing ElevenLabs connection to: {ws_url}")
+    logger.info(f"Initializing ElevenLabs connection for session {session.session_id} to: {ws_url}")
     
     def run_websocket():
         """Run WebSocket connection in a separate thread"""
-        global elevenlabs_ws, elevenlabs_connection_open, elevenlabs_session_started
-        global elevenlabs_current_transcript, elevenlabs_transcription_count
-        global elevenlabs_last_transcription_time, elevenlabs_session_start_time
-        
         try:
             headers = {"xi-api-key": api_key}
-            elevenlabs_ws = ws_connect(ws_url, additional_headers=headers)
-            logger.info("✅ Connected to ElevenLabs Scribe v2 Realtime")
+            session.ws = ws_connect(ws_url, additional_headers=headers)
+            logger.info(f"✅ Connected to ElevenLabs Scribe v2 Realtime for session {session.session_id}")
             
             # Start receiving messages
-            while not elevenlabs_stop_event.is_set():
+            while not session.stop_event.is_set():
                 try:
-                    message = elevenlabs_ws.recv(timeout=0.1)
+                    message = session.ws.recv(timeout=0.1)
                     if message:
-                        handle_elevenlabs_message(message)
+                        handle_elevenlabs_message(session, message)
                 except TimeoutError:
                     continue
                 except Exception as e:
-                    if elevenlabs_stop_event.is_set():
+                    if session.stop_event.is_set():
                         break
                     error_str = str(e).lower()
                     if "closed" in error_str or "connection" in error_str:
-                        logger.info("ElevenLabs WebSocket connection closed")
+                        logger.info(f"ElevenLabs WebSocket connection closed for session {session.session_id}")
                         break
-                    logger.error(f"Error receiving ElevenLabs message: {e}")
+                    logger.error(f"Error receiving ElevenLabs message for session {session.session_id}: {e}")
                     break
         
         except Exception as e:
-            logger.error(f"ElevenLabs WebSocket error: {e}")
-            if elevenlabs_socketio:
-                elevenlabs_socketio.emit('transcription_status', {
-                    'status': 'error',
-                    'message': f'ElevenLabs connection error: {e}'
-                })
+            logger.error(f"ElevenLabs WebSocket error for session {session.session_id}: {e}")
+            session.socketio.emit('transcription_status', {
+                'status': 'error',
+                'message': f'ElevenLabs connection error: {e}'
+            }, room=session.session_id)
         finally:
-            elevenlabs_connection_open = False
-            stop_elevenlabs_silence_timer()
-            if elevenlabs_session_start_time:
-                session_duration_ms = (time.perf_counter() - elevenlabs_session_start_time) * 1000
+            session.connection_open = False
+            stop_elevenlabs_silence_timer(session)
+            if session.session_start_time:
+                session_duration_ms = (time.perf_counter() - session.session_start_time) * 1000
                 performance_logger.info(
-                    f"SESSION_END | TotalDuration: {session_duration_ms:.2f}ms | "
-                    f"TotalTranscriptions: {elevenlabs_transcription_count}"
+                    f"SESSION_END | Session: {session.session_id} | TotalDuration: {session_duration_ms:.2f}ms | "
+                    f"TotalTranscriptions: {session.transcription_count}"
                 )
     
     # Start WebSocket in a separate thread
-    elevenlabs_thread = threading.Thread(target=run_websocket, daemon=True)
-    elevenlabs_thread.start()
+    session.thread = threading.Thread(target=run_websocket, daemon=True)
+    session.thread.start()
     
     # Wait for session to start (with timeout)
     max_wait_time = 5.0
-    if elevenlabs_session_started.wait(timeout=max_wait_time):
-        logger.info("ElevenLabs WebSocket connection started and session ready")
+    if session.session_started.wait(timeout=max_wait_time):
+        logger.info(f"ElevenLabs WebSocket connection started and session ready for session {session.session_id}")
         return True
     else:
-        logger.warning(f"ElevenLabs session did not start within {max_wait_time}s - connection may still be establishing")
+        logger.warning(f"ElevenLabs session did not start within {max_wait_time}s for session {session.session_id} - connection may still be establishing")
         return True
 
-
-def handle_elevenlabs_message(message: str):
-    """Handle incoming messages from ElevenLabs"""
-    global elevenlabs_transcription_count, elevenlabs_last_transcription_time
-    global elevenlabs_socketio, elevenlabs_current_transcript, elevenlabs_connection_open
-    global elevenlabs_session_started, elevenlabs_session_start_time, elevenlabs_last_audio_send_time
-    
+def handle_elevenlabs_message(session: ElevenLabsSession, message: str):
+    """Handle incoming messages from ElevenLabs for specific session"""
     try:
         data = json.loads(message)
         message_type = data.get("type", data.get("message_type"))
         
-        logger.debug(f"ElevenLabs received event: {message_type}")
+        logger.debug(f"ElevenLabs received event for session {session.session_id}: {message_type}")
         
         if message_type == "session_started":
-            session_id = data.get("session_id", "N/A")
-            logger.info(f"✅ ElevenLabs session started: {session_id}")
+            session_id_from_msg = data.get("session_id", "N/A")
+            logger.info(f"✅ ElevenLabs session started for session {session.session_id}: {session_id_from_msg}")
             config = data.get("config", {})
             if config:
-                logger.debug(f"   Config: {json.dumps(config, indent=2)}")
+                logger.debug(f"   Config for session {session.session_id}: {json.dumps(config, indent=2)}")
             
-            elevenlabs_connection_open = True
-            elevenlabs_session_started.set()
-            elevenlabs_session_start_time = time.perf_counter()
+            session.connection_open = True
+            session.session_started.set()
+            session.session_start_time = time.perf_counter()
             
             # Start silence timeout timer
-            reset_elevenlabs_silence_timer()
+            reset_elevenlabs_silence_timer(session)
             
             # Log session start
             performance_logger.info(
-                f"SESSION_START | Language: {elevenlabs_language} | Model: ElevenLabs Scribe V2 | Timestamp: {time.time()}"
+                f"SESSION_START | Session: {session.session_id} | Language: {session.language} | Model: ElevenLabs Scribe V2 | Timestamp: {time.time()}"
             )
             
             # Notify frontend that connection is ready
-            if elevenlabs_socketio:
-                elevenlabs_socketio.emit('transcription_status', {'status': 'started', 'api': 'ElevenLabs ScribeV2'})
+            session.socketio.emit('transcription_status', {'status': 'started', 'api': 'ElevenLabs ScribeV2'}, room=session.session_id)
         
         elif message_type == "partial_transcript":
             text = data.get("text", "")
             if text:
                 # Reset silence timer on partial transcript
-                reset_elevenlabs_silence_timer()
-                logger.info(f"ElevenLabs partial transcript: {text}")
+                reset_elevenlabs_silence_timer(session)
+                logger.info(f"ElevenLabs partial transcript for session {session.session_id}: {text}")
                 # Emit partial transcript for real-time feedback
-                if elevenlabs_socketio:
-                    elevenlabs_socketio.emit('transcription_update', {'transcription': text})
-                    logger.info(f"✅ Emitted transcription_update event with partial: '{text}'")
+                session.socketio.emit('transcription_update', {'transcription': text}, room=session.session_id)
+                logger.info(f"✅ Emitted transcription_update event for session {session.session_id} with partial: '{text}'")
         
         elif message_type in ("committed_transcript", "final_transcript", "committed_transcript_with_timestamps"):
             text = data.get("text", "")
             if text:
-                elevenlabs_current_transcript = text
+                session.current_transcript = text
                 current_time = time.perf_counter()
                 
                 # Calculate performance metrics
-                time_since_start_ms = (current_time - elevenlabs_session_start_time) * 1000 if elevenlabs_session_start_time else 0
-                if elevenlabs_last_transcription_time:
-                    time_since_last_ms = (current_time - elevenlabs_last_transcription_time) * 1000
+                time_since_start_ms = (current_time - session.session_start_time) * 1000 if session.session_start_time else 0
+                if session.last_transcription_time:
+                    time_since_last_ms = (current_time - session.last_transcription_time) * 1000
                 else:
                     time_since_last_ms = 0
                 
-                if elevenlabs_last_audio_send_time:
-                    transcription_response_time_ms = (current_time - elevenlabs_last_audio_send_time) * 1000
+                if session.last_audio_send_time:
+                    transcription_response_time_ms = (current_time - session.last_audio_send_time) * 1000
                 else:
                     transcription_response_time_ms = 0
                 
-                elevenlabs_transcription_count += 1
-                elevenlabs_last_transcription_time = current_time
+                session.transcription_count += 1
+                session.last_transcription_time = current_time
                 
                 # Log performance metrics
                 performance_logger.info(
-                    f"TRANSCRIPTION | Count: {elevenlabs_transcription_count} | "
+                    f"TRANSCRIPTION | Session: {session.session_id} | Count: {session.transcription_count} | "
                     f"ResponseTime: {transcription_response_time_ms:.2f}ms | "
                     f"TimeSinceStart: {time_since_start_ms:.2f}ms | "
                     f"TimeSinceLast: {time_since_last_ms:.2f}ms | "
@@ -346,73 +352,79 @@ def handle_elevenlabs_message(message: str):
                 )
                 
                 # Reset silence timer
-                reset_elevenlabs_silence_timer()
+                reset_elevenlabs_silence_timer(session)
                 
-                logger.info(f"ElevenLabs final transcript: {text}")
-                if elevenlabs_socketio:
-                    elevenlabs_socketio.emit('transcription_update', {'transcription': text})
-                    logger.info(f"✅ Emitted transcription_update event with final: '{text}'")
+                logger.info(f"ElevenLabs final transcript for session {session.session_id}: {text}")
+                session.socketio.emit('transcription_update', {'transcription': text}, room=session.session_id)
+                logger.info(f"✅ Emitted transcription_update event for session {session.session_id} with final: '{text}'")
         
         elif message_type == "commit_throttled":
-            logger.warning("⚠️ ElevenLabs commit throttled")
+            logger.warning(f"⚠️ ElevenLabs commit throttled for session {session.session_id}")
         
         elif message_type in ("error", "auth_error", "quota_exceeded", "transcriber_error", "input_error", "rate_limited"):
             error = data.get("error", data.get("message", "Unknown error"))
-            logger.error(f"❌ ElevenLabs {message_type}: {error}")
-            performance_logger.error(f"ERROR | Type: {message_type} | Message: {error}")
-            if elevenlabs_socketio:
-                elevenlabs_socketio.emit('transcription_status', {
-                    'status': 'error',
-                    'message': f'ElevenLabs error: {error}'
-                })
+            logger.error(f"❌ ElevenLabs {message_type} for session {session.session_id}: {error}")
+            performance_logger.error(f"ERROR | Session: {session.session_id} | Type: {message_type} | Message: {error}")
+            session.socketio.emit('transcription_status', {
+                'status': 'error',
+                'message': f'ElevenLabs error: {error}'
+            }, room=session.session_id)
         else:
-            logger.debug(f"🔍 ElevenLabs message type '{message_type}': {json.dumps(data)[:200]}")
+            logger.debug(f"🔍 ElevenLabs message type '{message_type}' for session {session.session_id}: {json.dumps(data)[:200]}")
     
     except json.JSONDecodeError:
-        logger.warning(f"⚠️ ElevenLabs received non-JSON message: {message[:200]}")
+        logger.warning(f"⚠️ ElevenLabs received non-JSON message for session {session.session_id}: {message[:200]}")
     except Exception as e:
-        logger.error(f"Error processing ElevenLabs message: {e}")
+        logger.error(f"Error processing ElevenLabs message for session {session.session_id}: {e}")
 
-
-def send_audio_to_elevenlabs(audio_data: bytes) -> bool:
+def send_audio_to_elevenlabs(audio_data: bytes, session_id: str = None) -> bool:
     """
-    Send audio data to ElevenLabs WebSocket
+    Send audio data to ElevenLabs WebSocket for specific session
     
     Args:
         audio_data: Audio data in bytes (PCM16 format, 16kHz)
+        session_id: Session ID for user isolation
     
     Returns:
         bool: True if audio was sent successfully
     """
-    global elevenlabs_ws, elevenlabs_last_audio_send_time, elevenlabs_connection_open, elevenlabs_audio_buffer
+    if not session_id:
+        logger.warning("Session ID is required for ElevenLabs audio sending")
+        return False
+        
+    with elevenlabs_sessions_lock:
+        if session_id not in elevenlabs_sessions:
+            logger.warning(f"ElevenLabs session {session_id} not found")
+            return False
+        session = elevenlabs_sessions[session_id]
     
-    if not elevenlabs_ws:
-        logger.warning("ElevenLabs WebSocket connection is not initialized")
+    if not session.ws:
+        logger.warning(f"ElevenLabs WebSocket connection is not initialized for session {session.session_id}")
         return False
     
     # Check if session has started
-    if not elevenlabs_connection_open:
+    if not session.connection_open:
         # Buffer audio while connection is establishing
-        with elevenlabs_audio_buffer_lock:
-            elevenlabs_audio_buffer.extend(audio_data)
-            if len(elevenlabs_audio_buffer) > ELEVENLABS_AUDIO_CHUNK_SIZE * 10:
-                elevenlabs_audio_buffer = elevenlabs_audio_buffer[-ELEVENLABS_AUDIO_CHUNK_SIZE * 5:]
-        logger.debug(f"ElevenLabs connection establishing - buffered {len(audio_data)} bytes")
+        with session.audio_buffer_lock:
+            session.audio_buffer.extend(audio_data)
+            if len(session.audio_buffer) > ELEVENLABS_AUDIO_CHUNK_SIZE * 10:
+                session.audio_buffer = session.audio_buffer[-ELEVENLABS_AUDIO_CHUNK_SIZE * 5:]
+        logger.debug(f"ElevenLabs connection establishing for session {session.session_id} - buffered {len(audio_data)} bytes")
         return False
     
     try:
         # Add incoming data to buffer
-        with elevenlabs_audio_buffer_lock:
-            elevenlabs_audio_buffer.extend(audio_data)
+        with session.audio_buffer_lock:
+            session.audio_buffer.extend(audio_data)
         
         # Send buffered audio in chunks
         bytes_sent = 0
         while True:
-            with elevenlabs_audio_buffer_lock:
-                if len(elevenlabs_audio_buffer) < ELEVENLABS_AUDIO_CHUNK_SIZE:
+            with session.audio_buffer_lock:
+                if len(session.audio_buffer) < ELEVENLABS_AUDIO_CHUNK_SIZE:
                     break
-                chunk = bytes(elevenlabs_audio_buffer[:ELEVENLABS_AUDIO_CHUNK_SIZE])
-                elevenlabs_audio_buffer = elevenlabs_audio_buffer[ELEVENLABS_AUDIO_CHUNK_SIZE:]
+                chunk = bytes(session.audio_buffer[:ELEVENLABS_AUDIO_CHUNK_SIZE])
+                session.audio_buffer = session.audio_buffer[ELEVENLABS_AUDIO_CHUNK_SIZE:]
             
             # Encode audio as base64 (ElevenLabs format)
             audio_base64 = base64.b64encode(chunk).decode('utf-8')
@@ -425,57 +437,62 @@ def send_audio_to_elevenlabs(audio_data: bytes) -> bool:
             }
             
             # Track when audio is sent
-            elevenlabs_last_audio_send_time = time.perf_counter()
-            elevenlabs_ws.send(json.dumps(message))
+            session.last_audio_send_time = time.perf_counter()
+            session.ws.send(json.dumps(message))
             bytes_sent += len(chunk)
         
         if bytes_sent > 0:
-            logger.debug(f"📤 Sent {bytes_sent} bytes to ElevenLabs")
+            logger.debug(f"📤 Sent {bytes_sent} bytes to ElevenLabs for session {session.session_id}")
         return True
     
     except Exception as e:
         error_msg = str(e)
         if "closed" in error_msg.lower():
-            logger.warning(f"ElevenLabs WebSocket connection is closed - cannot send audio")
-            elevenlabs_connection_open = False
-            if elevenlabs_socketio:
-                elevenlabs_socketio.emit('transcription_status', {
-                    'status': 'error',
-                    'message': 'ElevenLabs connection closed. Please restart transcription.'
-                })
+            logger.warning(f"ElevenLabs WebSocket connection is closed for session {session.session_id} - cannot send audio")
+            session.connection_open = False
+            session.socketio.emit('transcription_status', {
+                'status': 'error',
+                'message': 'ElevenLabs connection closed. Please restart transcription.'
+            }, room=session.session_id)
         else:
-            logger.error(f"Error sending audio to ElevenLabs: {e}")
+            logger.error(f"Error sending audio to ElevenLabs for session {session.session_id}: {e}")
         return False
 
-
-def close_elevenlabs_connection():
-    """Close ElevenLabs WebSocket connection"""
-    global elevenlabs_ws, elevenlabs_thread, elevenlabs_current_transcript
-    global elevenlabs_connection_open, elevenlabs_audio_buffer, elevenlabs_stop_event
+def close_elevenlabs_connection(session_id: str = None):
+    """Close ElevenLabs WebSocket connection for specific session"""
+    if not session_id:
+        logger.warning("Session ID is required for ElevenLabs connection closing")
+        return
+        
+    with elevenlabs_sessions_lock:
+        if session_id not in elevenlabs_sessions:
+            logger.warning(f"ElevenLabs session {session_id} not found for closing")
+            return
+        session = elevenlabs_sessions[session_id]
     
     # Signal stop
-    elevenlabs_stop_event.set()
-    elevenlabs_connection_open = False
+    session.stop_event.set()
+    session.connection_open = False
     
     # Stop silence timer
-    stop_elevenlabs_silence_timer()
+    stop_elevenlabs_silence_timer(session)
     
     # Clear audio buffer
-    with elevenlabs_audio_buffer_lock:
-        elevenlabs_audio_buffer = bytearray()
+    with session.audio_buffer_lock:
+        session.audio_buffer = bytearray()
     
     # Close WebSocket
-    ws_to_close = elevenlabs_ws
-    elevenlabs_ws = None
+    ws_to_close = session.ws
+    session.ws = None
     
     if ws_to_close:
         try:
-            logger.info("Closing ElevenLabs WebSocket connection")
+            logger.info(f"Closing ElevenLabs WebSocket connection for session {session.session_id}")
             ws_to_close.close()
         except Exception as e:
-            logger.debug(f"Error closing ElevenLabs connection (may be already closed): {e}")
+            logger.debug(f"Error closing ElevenLabs connection for session {session.session_id} (may be already closed): {e}")
     
     # Reset transcript
-    elevenlabs_current_transcript = ""
+    session.current_transcript = ""
     
-    logger.info("🔌 ElevenLabs disconnected")
+    logger.info(f"🔌 ElevenLabs disconnected for session {session.session_id}")

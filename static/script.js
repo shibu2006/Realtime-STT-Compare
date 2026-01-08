@@ -261,6 +261,18 @@ async function startRecording() {
 }
 
 async function stopRecording() {
+  // Always clean up visual state first - with null checks
+  document.body.classList.remove("recording");
+  const micButton = document.getElementById("micButton");
+  const languageSelect = document.getElementById("languageSelect");
+  if (micButton) {
+    micButton.classList.remove("recording");
+    micButton.classList.remove("pressed"); // Ensure pressed state is removed
+  }
+  if (languageSelect) {
+    languageSelect.disabled = false; // Re-enable language selection after recording stops
+  }
+  
   if (isRecording === true) {
     if (microphone && microphone.type === 'mediarecorder') {
       // Stop MediaRecorder
@@ -289,11 +301,6 @@ async function stopRecording() {
     connectionReady = false;
     pendingAudioChunks = []; // Clear buffered audio
     console.log("Client: Microphone closed");
-    document.body.classList.remove("recording");
-    const micButton = document.getElementById("micButton");
-    const languageSelect = document.getElementById("languageSelect");
-    micButton.classList.remove("recording");
-    languageSelect.disabled = false; // Re-enable language selection after recording stops
   }
 }
 
@@ -304,6 +311,12 @@ document.addEventListener("DOMContentLoaded", () => {
   const languageSelect = document.getElementById("languageSelect");
   const apiSelect = document.getElementById("apiSelect");
   const recordCheckbox = document.getElementById("record");
+
+  // Check if all required elements exist
+  if (!micButton || !searchButton || !searchInput || !languageSelect || !apiSelect) {
+    console.error("Required DOM elements not found. Check HTML structure.");
+    return;
+  }
 
   // Store all language options for later use (clone them to preserve original state)
   const allLanguageOptions = Array.from(languageSelect.options).map(opt => ({
@@ -347,33 +360,140 @@ document.addEventListener("DOMContentLoaded", () => {
   // Initialize language options on page load
   updateLanguageOptions();
 
-  // Handle microphone button click
-  micButton.addEventListener("click", () => {
-    if (!isRecording) {
-      if (!socket.connected) {
-        console.error("Socket not connected. Please refresh the page.");
-        alert("Connection lost. Please refresh the page.");
-        return;
-      }
-      const selectedLanguage = languageSelect.value;
-      const selectedAPI = apiSelect.value;
-      socket.emit("toggle_transcription", { 
-        action: "start",
-        language: selectedLanguage,
-        api: selectedAPI
-      });
-      startRecording().catch((error) =>
-        console.error("Error starting recording:", error)
-      );
-    } else {
-      const selectedAPI = apiSelect.value;
-      socket.emit("toggle_transcription", { 
-        action: "stop",
-        api: selectedAPI
-      });
-      stopRecording().catch((error) =>
-        console.error("Error stopping recording:", error)
-      );
+  // Handle microphone button push-to-talk (mousedown/mouseup and touchstart/touchend)
+  
+  // Debounce mechanism to prevent rapid-fire events
+  let lastStartTime = 0;
+  let lastStopTime = 0;
+  const DEBOUNCE_DELAY = 100; // 100ms debounce
+  
+  // Function to start recording
+  const startRecordingHandler = () => {
+    const now = Date.now();
+    if (now - lastStartTime < DEBOUNCE_DELAY) {
+      return; // Debounced
+    }
+    lastStartTime = now;
+    
+    if (isRecording) return; // Already recording
+    
+    if (!socket.connected) {
+      console.error("Socket not connected. Please refresh the page.");
+      alert("Connection lost. Please refresh the page.");
+      return;
+    }
+    
+    // Add pressed visual feedback - with null check
+    if (micButton) {
+      micButton.classList.add("pressed");
+    }
+    
+    const selectedLanguage = languageSelect ? languageSelect.value : "English";
+    const selectedAPI = apiSelect ? apiSelect.value : "Deepgram API";
+    socket.emit("toggle_transcription", { 
+      action: "start",
+      language: selectedLanguage,
+      api: selectedAPI
+    });
+    startRecording().catch((error) =>
+      console.error("Error starting recording:", error)
+    );
+  };
+
+  // Function to stop recording
+  const stopRecordingHandler = () => {
+    const now = Date.now();
+    if (now - lastStopTime < DEBOUNCE_DELAY) {
+      return; // Debounced
+    }
+    lastStopTime = now;
+    
+    // Always remove pressed visual feedback - with null check
+    if (micButton) {
+      micButton.classList.remove("pressed");
+    }
+    
+    // Only send stop if we were actually recording
+    if (!isRecording) return;
+    
+    const selectedAPI = apiSelect ? apiSelect.value : "Deepgram API";
+    socket.emit("toggle_transcription", { 
+      action: "stop",
+      api: selectedAPI
+    });
+    stopRecording().catch((error) =>
+      console.error("Error stopping recording:", error)
+    );
+  };
+
+  // Mouse events for desktop
+  micButton.addEventListener("mousedown", (e) => {
+    e.preventDefault(); // Prevent default behavior
+    startRecordingHandler();
+  });
+
+  micButton.addEventListener("mouseup", (e) => {
+    e.preventDefault();
+    stopRecordingHandler();
+  });
+
+  // Global mouseup to catch releases outside the button
+  document.addEventListener("mouseup", (e) => {
+    // Only stop if we're currently recording and the mouseup is not on the mic button
+    if (isRecording && micButton && !micButton.contains(e.target)) {
+      stopRecordingHandler();
+    }
+  });
+
+  // Handle mouse leave to stop recording if user drags mouse away while holding
+  micButton.addEventListener("mouseleave", (e) => {
+    // Always stop recording when mouse leaves, regardless of current state
+    stopRecordingHandler();
+  });
+
+  // Touch events for mobile devices (using passive listeners for better performance)
+  micButton.addEventListener("touchstart", (e) => {
+    e.preventDefault(); // Prevent default touch behavior and mouse events
+    startRecordingHandler();
+  }, { passive: false }); // passive: false because we need preventDefault
+
+  micButton.addEventListener("touchend", (e) => {
+    e.preventDefault();
+    stopRecordingHandler();
+  }, { passive: false }); // passive: false because we need preventDefault
+
+  // Handle touch cancel (when touch is interrupted)
+  micButton.addEventListener("touchcancel", (e) => {
+    if (isRecording) {
+      stopRecordingHandler();
+    }
+  }, { passive: true }); // passive: true since we don't need preventDefault
+
+  // Keyboard support for accessibility (spacebar for push-to-talk)
+  let spacebarPressed = false;
+  
+  document.addEventListener("keydown", (e) => {
+    // Only handle spacebar if the search input is not focused (to allow typing spaces)
+    if (e.code === "Space" && document.activeElement !== searchInput && !spacebarPressed) {
+      e.preventDefault();
+      spacebarPressed = true;
+      startRecordingHandler();
+    }
+  });
+
+  document.addEventListener("keyup", (e) => {
+    if (e.code === "Space" && spacebarPressed) {
+      e.preventDefault();
+      spacebarPressed = false;
+      stopRecordingHandler();
+    }
+  });
+
+  // Reset spacebar state if window loses focus
+  window.addEventListener("blur", () => {
+    if (spacebarPressed) {
+      spacebarPressed = false;
+      stopRecordingHandler();
     }
   });
 
