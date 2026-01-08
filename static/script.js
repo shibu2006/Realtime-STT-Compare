@@ -8,6 +8,14 @@ let audioProcessor = null;
 let audioStream = null;
 let pendingAudioChunks = []; // Buffer audio while waiting for connection
 let connectionReady = false; // Track if backend connection is ready
+let speechAnalyser = null; // AnalyserNode for volume detection
+let speechTimeout = null; // Timer for service timeout
+let lastSpeechTime = 0; // Timestamp of last detected speech
+let lastTranscriptionTime = 0; // Timestamp of last received transcription
+let speechDetectedInSession = false; // Flag to track if user spoke in current session
+
+const SPEECH_THRESHOLD = 0.02; // Volume threshold to consider as speech (0.0 to 1.0)
+const SERVICE_TIMEOUT_MS = 1000; // 1 second timeout as requested
 
 // Connect to SocketIO on the same port as the web server
 socket = io();
@@ -28,7 +36,7 @@ socket.on("transcription_status", (data) => {
   console.log("Transcription status:", data);
   if (data.status === "error") {
     console.error("Transcription error:", data.message);
-    alert(`Transcription error: ${data.message}`);
+    showStatusMessage(`Transcription error: ${data.message}`);
 
     // Reset state on error
     connectionReady = false;
@@ -59,8 +67,7 @@ socket.on("silence_timeout", (data) => {
   console.log("Silence timeout:", data.message);
   // Automatically stop recording when silence timeout is reached
   stopRecordingHandler(); // Use handler to update UI properly
-  // Optionally show a notification to the user
-  console.warn(data.message);
+  showStatusMessage(data.message);
 });
 
 let currentTranscription = ""; // Store accumulated transcription
@@ -68,12 +75,13 @@ let isTranscribing = false; // Track if we're currently transcribing
 let stopTimeout = null; // Timeout for delayed stop
 
 socket.on("transcription_update", (data) => {
-  console.log("✅ Received transcription_update event:", data);
+  // Reset service timeout whenever we get data
+  lastTranscriptionTime = Date.now();
+  hideStatusMessage();
+
   const searchInput = document.getElementById("searchInput");
-  if (!searchInput) {
-    console.error("❌ searchInput element not found!");
-    return;
-  }
+  if (!searchInput) return;
+
   if (data && data.transcription !== undefined && data.transcription !== null) {
     const newTranscription = data.transcription.trim();
 
@@ -97,14 +105,50 @@ socket.on("transcription_update", (data) => {
         }
       }
 
-      const oldValue = searchInput.value;
       searchInput.value = currentTranscription;
-
-      // Also trigger input event to ensure any listeners are notified
       searchInput.dispatchEvent(new Event('input', { bubbles: true }));
     }
   }
 });
+
+function showStatusMessage(msg) {
+  const el = document.getElementById('statusMessage');
+  if (el) {
+    el.innerText = msg;
+    el.classList.add('visible');
+  }
+}
+
+function hideStatusMessage() {
+  const el = document.getElementById('statusMessage');
+  if (el) {
+    el.classList.remove('visible');
+    // Clear text after transition
+    setTimeout(() => {
+      if (!el.classList.contains('visible')) el.innerText = '';
+    }, 300);
+  }
+}
+
+// Function to check audio level (removed automatic timeout trigger)
+function monitorAudioLevel() {
+  if (!isRecording || !speechAnalyser) return;
+
+  const dataArray = new Uint8Array(speechAnalyser.frequencyBinCount);
+  speechAnalyser.getByteTimeDomainData(dataArray);
+
+  let sum = 0;
+  for (let i = 0; i < dataArray.length; i++) {
+    const x = (dataArray[i] - 128) / 128.0;
+    sum += x * x;
+  }
+  const rms = Math.sqrt(sum / dataArray.length);
+
+  if (rms > SPEECH_THRESHOLD) {
+    lastSpeechTime = Date.now();
+    speechDetectedInSession = true;
+  }
+}
 
 async function getMicrophone(useWebAudio = false) {
   try {
@@ -116,6 +160,21 @@ async function getMicrophone(useWebAudio = false) {
         noiseSuppression: true
       }
     });
+
+    // START AUDIO ANALYSIS FOR TIMEOUT LOGIC
+    // We attach analysis to the stream regardless of recording method
+    try {
+      const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+      const source = audioCtx.createMediaStreamSource(stream);
+      speechAnalyser = audioCtx.createAnalyser();
+      speechAnalyser.fftSize = 256;
+      source.connect(speechAnalyser);
+
+      // Start monitoring loop - only tracks speech time now, doesn't trigger alerts
+      speechTimeout = setInterval(monitorAudioLevel, 100);
+    } catch (e) {
+      console.error("Failed to setup audio analysis:", e);
+    }
 
     if (useWebAudio) {
       audioStream = stream;
@@ -210,9 +269,6 @@ async function openMicrophone(microphone, socket, useWebAudio = false) {
 
         console.log("Client: Web Audio API microphone opened");
 
-        // IMPORTANT: We do NOT add 'recording' class here anymore. 
-        // It is handled optimistically in startRecordingHandler.
-
         resolve();
       } catch (error) {
         console.error("Error setting up Web Audio API:", error);
@@ -223,7 +279,6 @@ async function openMicrophone(microphone, socket, useWebAudio = false) {
     return new Promise((resolve) => {
       microphone.recorder.onstart = () => {
         console.log("Client: MediaRecorder microphone opened");
-        // 'recording' class handled optimistically
         resolve();
       };
 
@@ -248,15 +303,21 @@ async function startRecording() {
 
   isInitializing = true;
   pendingStop = false;
-  isRecording = true; // Set true immediately for logic check
+  isRecording = true;
 
-  // Optimistic UI: Set recording state immediately
+  // Reset Tracking Variables
+  lastSpeechTime = 0;
+  lastTranscriptionTime = Date.now(); // Assume we start "fresh"
+  speechDetectedInSession = false;
+  hideStatusMessage();
+
+  // Optimistic UI
   document.body.classList.add("recording");
   const micButton = document.getElementById("micButton");
   const languageSelect = document.getElementById("languageSelect");
   if (micButton) {
     micButton.classList.add("recording");
-    micButton.classList.add("pressed"); // Also add pressed for immediate feedback
+    micButton.classList.add("pressed");
   }
   if (languageSelect) {
     languageSelect.disabled = true;
@@ -282,14 +343,10 @@ async function startRecording() {
   try {
     microphone = await getMicrophone(useWebAudio);
 
-    // Check pendingStop *after* getting mic, before opening
     if (pendingStop) {
       console.log("🛑 Stop requested after getMicrophone - cleaning up");
       isInitializing = false;
-      // Clean up the stream we just got
-      if (microphone.stream) {
-        microphone.stream.getTracks().forEach(t => t.stop());
-      }
+      cleanupMicrophone(); // Helper for stream cleanup
       stopRecordingImmediate();
       return;
     }
@@ -299,7 +356,6 @@ async function startRecording() {
 
     isInitializing = false;
 
-    // Check pendingStop *after* opening mic
     if (pendingStop) {
       console.log("🛑 Stop requested after openMicrophone - stopping now");
       stopRecordingImmediate();
@@ -310,7 +366,22 @@ async function startRecording() {
     isInitializing = false;
     isRecording = false;
     alert("Could not access microphone. Please verify permissions.");
-    stopRecordingImmediate(); // Revert UI
+    stopRecordingImmediate();
+  }
+}
+
+function cleanupMicrophone() {
+  if (microphone && microphone.stream) {
+    microphone.stream.getTracks().forEach(t => t.stop());
+  }
+  if (speechTimeout) {
+    clearInterval(speechTimeout);
+    speechTimeout = null;
+  }
+  if (speechAnalyser) {
+    // speechAnalyser is node, context clean up happens elsewhere generally, 
+    // but removing reference is enough
+    speechAnalyser = null;
   }
 }
 
@@ -330,13 +401,13 @@ function stopRecordingImmediate() {
     languageSelect.disabled = false;
   }
 
+  hideStatusMessage(); // Hide any errors on stop
+  cleanupMicrophone(); // Clear intervals and analysers
+
   // Logic Cleanup
   if (microphone && microphone.type === 'mediarecorder') {
     if (microphone.recorder.state !== 'inactive') {
       microphone.recorder.stop();
-    }
-    if (microphone.stream) {
-      microphone.stream.getTracks().forEach((track) => track.stop());
     }
   } else if (microphone && microphone.type === 'webaudio') {
     if (audioProcessor) {
@@ -348,7 +419,8 @@ function stopRecordingImmediate() {
       audioContext = null;
     }
     if (audioStream) {
-      audioStream.getTracks().forEach((track) => track.stop());
+      // audioStream tracks stopped in cleanupMicrophone already but safe to double check if needed
+      // but here we just null it
       audioStream = null;
     }
   }
@@ -362,17 +434,14 @@ function stopRecordingImmediate() {
 
 let lastStartTime = 0;
 let lastStopTime = 0;
-const DEBOUNCE_DELAY = 200; // Increased debounce slightly
+const DEBOUNCE_DELAY = 200;
 
 const startRecordingHandler = () => {
   const now = Date.now();
   if (now - lastStartTime < DEBOUNCE_DELAY) return;
   lastStartTime = now;
 
-  if (isRecording || isInitializing) {
-    // Already active, ignore
-    return;
-  }
+  if (isRecording || isInitializing) return;
 
   if (!socket.connected) {
     console.error("Socket not connected.");
@@ -380,7 +449,6 @@ const startRecordingHandler = () => {
     return;
   }
 
-  // Send socket event
   const languageSelect = document.getElementById("languageSelect");
   const apiSelect = document.getElementById("apiSelect");
   const selectedLanguage = languageSelect ? languageSelect.value : "English";
@@ -392,25 +460,19 @@ const startRecordingHandler = () => {
     api: selectedAPI
   });
 
-  // Start recording audio
   startRecording().catch(console.error);
 };
 
 const stopRecordingHandler = () => {
-  // If not recording and not initializing, nothing to do
   if (!isRecording && !isInitializing) return;
 
-  // If initializing, set pendingStop flag so it stops as soon as it's ready
   if (isInitializing) {
     console.log("⚠️ Stop requested while initializing - setting pendingStop");
     pendingStop = true;
-    // Don't return, we can still update UI partially if needed, 
-    // but stopRecordingImmediate will handle full cleanup when called.
   }
 
   const now = Date.now();
   if (now - lastStopTime < DEBOUNCE_DELAY) {
-    // If release is too quick, ensure we still process it after delay
     setTimeout(stopRecordingHandler, DEBOUNCE_DELAY);
     return;
   }
@@ -418,19 +480,32 @@ const stopRecordingHandler = () => {
 
   const micButton = document.getElementById("micButton");
 
-  // Clear stop timeout if one exists
   if (stopTimeout) clearTimeout(stopTimeout);
 
-  // Visual feedback for processing
   if (micButton) {
     micButton.style.opacity = "0.7";
-    micButton.classList.add("processing"); // New class for spinning/processing state
+    micButton.classList.add("processing");
   }
+
+  // Check for timeout condition 1s after release
+  setTimeout(() => {
+    // Only check if we are still "waiting" (stopTimeout exists)
+    if (stopTimeout) {
+      const checkNow = Date.now();
+      // Logic: User spoke recently (within ~2s of release), 
+      // AND we haven't seen a transcript in > 1s
+      if (speechDetectedInSession && (lastStopTime - lastSpeechTime < 2000)) {
+        if (checkNow - lastTranscriptionTime > 1000) {
+          console.warn("⚠️ Service timeout detected post-release!");
+          showStatusMessage("Service timeout. Please retry.");
+        }
+      }
+    }
+  }, 1000);
 
   console.log("🔄 Voice stopped - waiting for final transcription...");
 
   stopTimeout = setTimeout(() => {
-    // Remove processing state
     if (micButton) micButton.classList.remove("processing");
 
     const apiSelect = document.getElementById("apiSelect");
@@ -468,6 +543,13 @@ document.addEventListener("DOMContentLoaded", () => {
 
   function updateLanguageOptions() {
     const selectedAPI = apiSelect.value;
+
+    // Clear text when switching providers
+    if (searchInput) {
+      searchInput.value = "";
+    }
+    currentTranscription = "";
+
     languageSelect.innerHTML = '';
 
     if (selectedAPI === "Azure OpenAI" || selectedAPI === "ElvenLabs ScribeV2") {

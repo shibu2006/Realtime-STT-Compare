@@ -1,84 +1,78 @@
 <!DOCTYPE html>
 <html>
-  <head>
-    <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>VoiceSearch</title>
-    <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🎤</text></svg>">
-    <link
-      rel="stylesheet"
-      href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css"
-    />
-    <link rel="stylesheet" href="../static/style.css" />
-    <script
-      src="https://cdn.socket.io/4.5.3/socket.io.min.js"
-      crossorigin="anonymous"
-    ></script>
-  </head>
-  <body>
-    <div class="container">
-      <h1 class="app-title">
-        <span class="title-voice">Voice</span><span class="title-search">Transcribe</span>
-      </h1>
-      
-      <div class="settings-group">
-        <div class="control-wrapper">
-          <label for="apiSelect" class="control-label">Provider</label>
-          <div class="styled-select-wrapper">
-            <select id="apiSelect" class="api-select">
-              <option value="Deepgram API" selected>Deepgram API</option>
-              <option value="Azure OpenAI">Azure OpenAI</option>
-              <option value="ElvenLabs ScribeV2">ElevenLabs ScribeV2</option>
-            </select>
-          </div>
-        </div>
-        
-        <div class="control-wrapper">
-          <label for="languageSelect" class="control-label">Language</label>
-          <div class="styled-select-wrapper">
-            <select id="languageSelect" class="language-select">
-              <option value="Auto">Auto</option>
-              <option value="Chinese">Chinese</option>
-              <option value="Danish">Danish</option>
-              <option value="Dutch">Dutch</option>
-              <option value="English" selected>English</option>
-              <option value="Finnish">Finnish</option>
-              <option value="French">French</option>
-              <option value="German">German</option>
-              <option value="Hindi">Hindi</option>
-              <option value="Hindi-English">Hinglish</option>
-              <option value="Italian">Italian</option>
-              <option value="Japanese">Japanese</option>
-              <option value="Korean">Korean</option>
-              <option value="Norwegian">Norwegian</option>
-              <option value="Portuguese">Portuguese</option>
-              <option value="Russian">Russian</option>
-              <option value="Spanish">Spanish</option>
-              <option value="Swedish">Swedish</option>
-            </select>
-          </div>
+
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>VoiceSearch</title>
+  <link rel="icon" type="image/svg+xml"
+    href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🎤</text></svg>">
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" />
+  <link rel="stylesheet" href="../static/style.css" />
+  <script src="https://cdn.socket.io/4.5.3/socket.io.min.js" crossorigin="anonymous"></script>
+</head>
+
+<body>
+  <div class="container">
+    <h1 class="app-title">
+      <span class="title-voice">Voice</span><span class="title-search">Transcribe</span>
+    </h1>
+
+    <div class="settings-group">
+      <div class="control-wrapper">
+        <label for="apiSelect" class="control-label">Provider</label>
+        <div class="styled-select-wrapper">
+          <select id="apiSelect" class="api-select">
+            <option value="Deepgram API" selected>Deepgram API</option>
+            <option value="Azure OpenAI">Azure OpenAI</option>
+            <option value="ElvenLabs ScribeV2">ElevenLabs ScribeV2</option>
+          </select>
         </div>
       </div>
-      
-      <div class="search-container">
-        <div class="search-input-wrapper">
-          <i class="fas fa-search search-icon"></i>
-          <input 
-            type="text" 
-            id="searchInput" 
-            class="search-input" 
-            placeholder="Search the web or hold microphone to speak..."
-            autocomplete="off"
-          />
-          <button id="micButton" class="mic-icon-button" title="Hold to speak (or press and hold spacebar)">
-            <i class="fas fa-microphone mic-icon"></i>
-          </button>
+
+      <div class="control-wrapper">
+        <label for="languageSelect" class="control-label">Language</label>
+        <div class="styled-select-wrapper">
+          <select id="languageSelect" class="language-select">
+            <option value="Auto">Auto</option>
+            <option value="Chinese">Chinese</option>
+            <option value="Danish">Danish</option>
+            <option value="Dutch">Dutch</option>
+            <option value="English" selected>English</option>
+            <option value="Finnish">Finnish</option>
+            <option value="French">French</option>
+            <option value="German">German</option>
+            <option value="Hindi">Hindi</option>
+            <option value="Hindi-English">Hinglish</option>
+            <option value="Italian">Italian</option>
+            <option value="Japanese">Japanese</option>
+            <option value="Korean">Korean</option>
+            <option value="Norwegian">Norwegian</option>
+            <option value="Portuguese">Portuguese</option>
+            <option value="Russian">Russian</option>
+            <option value="Spanish">Spanish</option>
+            <option value="Swedish">Swedish</option>
+          </select>
         </div>
-        <button id="searchButton" class="search-button">Search</button>
       </div>
     </div>
-    
-    <input type="checkbox" id="record" class="mic-checkbox" />
-    <script src="../static/script.js"></script>
-  </body>
+
+    <div class="search-container">
+      <div class="search-input-wrapper">
+        <i class="fas fa-search search-icon"></i>
+        <input type="text" id="searchInput" class="search-input"
+          placeholder="Search the web or hold microphone to speak..." autocomplete="off" />
+        <button id="micButton" class="mic-icon-button" title="Hold to speak (or press and hold spacebar)">
+          <i class="fas fa-microphone mic-icon"></i>
+        </button>
+      </div>
+      <div id="statusMessage" class="status-message"></div>
+      <button id="searchButton" class="search-button">Search</button>
+    </div>
+  </div>
+
+  <input type="checkbox" id="record" class="mic-checkbox" />
+  <script src="../static/script.js"></script>
+</body>
+
 </html>

@@ -25,7 +25,7 @@
 body {
   font-family: "Outfit", sans-serif;
   background-color: var(--bg-dark);
-  background-image: 
+  background-image:
     radial-gradient(at 0% 0%, rgba(99, 102, 241, 0.15) 0px, transparent 50%),
     radial-gradient(at 100% 0%, rgba(236, 72, 153, 0.15) 0px, transparent 50%),
     radial-gradient(at 100% 100%, rgba(99, 102, 241, 0.15) 0px, transparent 50%),
@@ -66,7 +66,7 @@ body {
   left: -50%;
   width: 200%;
   height: 200%;
-  background: radial-gradient(circle, rgba(255,255,255,0.03) 0%, transparent 60%);
+  background: radial-gradient(circle, rgba(255, 255, 255, 0.03) 0%, transparent 60%);
   pointer-events: none;
   z-index: 0;
 }
@@ -223,7 +223,7 @@ body {
   transition: color 0.3s ease;
 }
 
-.search-input:focus ~ .search-icon {
+.search-input:focus~.search-icon {
   color: var(--primary);
 }
 
@@ -304,6 +304,7 @@ body {
     transform: scale(0.8);
     opacity: 0.5;
   }
+
   100% {
     transform: scale(2.5);
     opacity: 0;
@@ -311,9 +312,17 @@ body {
 }
 
 @keyframes mic-pulse {
-  0% { transform: scale(1); }
-  50% { transform: scale(1.2); }
-  100% { transform: scale(1); }
+  0% {
+    transform: scale(1);
+  }
+
+  50% {
+    transform: scale(1.2);
+  }
+
+  100% {
+    transform: scale(1);
+  }
 }
 
 .search-button {
@@ -341,7 +350,7 @@ body {
   left: 0;
   width: 100%;
   height: 100%;
-  background: linear-gradient(135deg, rgba(255,255,255,0.2) 0%, transparent 100%);
+  background: linear-gradient(135deg, rgba(255, 255, 255, 0.2) 0%, transparent 100%);
   opacity: 0;
   transition: opacity 0.3s ease;
 }
@@ -357,6 +366,23 @@ body {
 
 .search-button:active {
   transform: translateY(0);
+}
+
+.status-message {
+  height: 20px;
+  margin-top: -16px;
+  margin-bottom: 4px;
+  font-size: 0.875rem;
+  font-weight: 500;
+  color: var(--danger);
+  min-width: 100%;
+  text-align: center;
+  transition: opacity 0.3s ease;
+  opacity: 0;
+}
+
+.status-message.visible {
+  opacity: 1;
 }
 
 .captions {
@@ -379,13 +405,19 @@ body {
 
 /* Processing/Loading State */
 .mic-icon-button.processing .mic-icon {
-  color: #fbbf24; /* Amber for processing */
+  color: #fbbf24;
+  /* Amber for processing */
   animation: spin 1s linear infinite;
 }
 
 @keyframes spin {
-  from { transform: rotate(0deg); }
-  to { transform: rotate(360deg); }
+  from {
+    transform: rotate(0deg);
+  }
+
+  to {
+    transform: rotate(360deg);
+  }
 }
 
 /* Responsive adjustments */
@@ -393,18 +425,18 @@ body {
   .app-title {
     font-size: 3rem;
   }
-  
+
   .container {
     padding: 1.5rem;
     border-radius: 16px;
     width: 95%;
   }
-  
+
   .settings-group {
     flex-direction: column;
     align-items: stretch;
   }
-  
+
   .styled-select-wrapper {
     width: 100%;
   }

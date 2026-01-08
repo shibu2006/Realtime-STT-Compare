@@ -2,6 +2,7 @@ import logging
 import os
 import time
 import threading
+import json
 from typing import TYPE_CHECKING, Optional, cast
 from flask import Flask, render_template, request
 from flask_socketio import SocketIO
@@ -174,6 +175,7 @@ class UserSession:
         self.last_transcription_time = None
         self.last_audio_send_time = None
         self.silence_timer = None
+        self.keep_alive_timer = None
         self.current_api_provider = "Deepgram API"
         
     def reset_performance_metrics(self):
@@ -196,6 +198,7 @@ def cleanup_user_session(session_id):
         if session_id in user_sessions:
             session = user_sessions[session_id]
             # Clean up any active connections
+            stop_keep_alive(session)
             if session.silence_timer:
                 session.silence_timer.cancel()
             if session.dg_connection:
@@ -252,6 +255,39 @@ def handle_silence_timeout(session):
                   {'message': f'Recording stopped due to {SILENCE_TIMEOUT_MS}ms silence timeout'}, 
                   room=session.session_id)
     stop_silence_timer(session)
+    stop_keep_alive(session)
+
+def start_keep_alive(session):
+    """Start the keep-alive timer to prevent Deepgram connection timeouts"""
+    if session.keep_alive_timer:
+        session.keep_alive_timer.cancel()
+    
+    # Send KeepAlive every 8 seconds (Deepgram timeout is usually 10-12s)
+    session.keep_alive_timer = threading.Timer(8.0, lambda: send_keep_alive(session))
+    session.keep_alive_timer.daemon = True
+    session.keep_alive_timer.start()
+
+def stop_keep_alive(session):
+    """Stop the keep-alive timer"""
+    if session.keep_alive_timer:
+        session.keep_alive_timer.cancel()
+        session.keep_alive_timer = None
+
+def send_keep_alive(session):
+    """Send KeepAlive message to Deepgram"""
+    if session.dg_connection:
+        try:
+            # Send KeepAlive JSON message
+            session.dg_connection.send(json.dumps({"type": "KeepAlive"}))
+            # logger.debug(f"Sent KeepAlive to Deepgram for session {session.session_id}")
+            
+            # Reschedule next KeepAlive
+            start_keep_alive(session)
+        except Exception as e:
+            logger.warning(f"Failed to send KeepAlive for session {session.session_id}: {e}")
+            stop_keep_alive(session)
+    else:
+        stop_keep_alive(session)
 
 # Language configuration dictionary
 LANGUAGES = {
@@ -370,6 +406,7 @@ def initialize_deepgram_connection(session, language_name="English"):
         logger.info(f"Deepgram connection closed for session {session.session_id}: {close}")
         # Stop silence timer when connection closes
         stop_silence_timer(session)
+        stop_keep_alive(session)
         if session.session_start_time:
             session_duration_ms = (time.perf_counter() - session.session_start_time) * 1000
             performance_logger.info(
@@ -410,6 +447,10 @@ def initialize_deepgram_connection(session, language_name="English"):
             return False
         
         logger.info(f"Deepgram connection started successfully for session {session.session_id}")
+        
+        # Start KeepAlive mechanism
+        start_keep_alive(session)
+        
         return True
     except Exception as e:
         logger.error(f"Exception while starting Deepgram connection for session {session.session_id}: {type(e).__name__}: {e}")
@@ -577,6 +618,8 @@ def handle_toggle_transcription(data):
             logger.info(f"Stopping Deepgram connection for session {session.session_id}")
             # Stop silence timer when manually stopping
             stop_silence_timer(session)
+            # Stop keep alive connection
+            stop_keep_alive(session)
             if session.dg_connection:
                 try:
                     session.dg_connection.finish()
@@ -600,6 +643,7 @@ def server_disconnect():
     
     # Clean up session-specific connections when client disconnects
     stop_silence_timer(session)
+    stop_keep_alive(session)
     
     # Clean up Deepgram connection
     if session.dg_connection:
