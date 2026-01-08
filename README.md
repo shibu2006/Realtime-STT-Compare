@@ -2,6 +2,8 @@
 
 VoiceTranscribe is a Flask-based web application that provides real-time **S**peech-**T**o-**T**ext transcription using multiple AI-powered transcription APIs. Choose between **Deepgram API**, **Azure OpenAI**, or **ElevenLabs ScribeV2** for your transcription needs. The application features a modern web interface, multi-language support, automatic silence detection, and comprehensive performance logging.
 
+<img src="https://github.com/shibu2006/VoiceTranscribeAppScreenshot.png" width="720" alt="Realtime-STT-Compare is a Voice Transcribe Screenshot">
+
 ## 🚀 Features
 
 - **Multiple Transcription APIs**: Choose between three powerful transcription services:
