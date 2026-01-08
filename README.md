@@ -68,6 +68,10 @@ VoiceTranscribe is a Flask-based web application that provides real-time **S**pe
    
    # Optional settings
    SILENCE_TIMEOUT=5000
+   
+   # Server configuration (optional)
+   HOST=0.0.0.0          # 0.0.0.0 for all interfaces, 127.0.0.1 for localhost only
+   PORT=8000             # Port number to listen on
    ```
    
    **API Key Requirements:**
@@ -75,6 +79,8 @@ VoiceTranscribe is a Flask-based web application that provides real-time **S**pe
    - **AZURE_OPENAI_API_KEY** & **AZURE_OPENAI_ENDPOINT**: Required for Azure OpenAI transcription
    - **ELEVENLABS_API_KEY**: Required for ElevenLabs ScribeV2 transcription
    - **SILENCE_TIMEOUT**: Silence timeout in milliseconds (optional, default: 5000ms)
+   - **HOST**: IP address to bind to (optional, default: 0.0.0.0)
+   - **PORT**: Port number to listen on (optional, default: 8000)
 
 ## 🚀 Quick Start
 
@@ -274,6 +280,10 @@ ELEVENLABS_API_KEY=sk_your_elevenlabs_api_key_here
 
 # Optional Settings
 SILENCE_TIMEOUT=5000  # Milliseconds (default: 5000)
+
+# Server Configuration (optional)
+HOST=0.0.0.0          # IP to bind to (default: 0.0.0.0)
+PORT=8000             # Port to listen on (default: 8000)
 ```
 
 ### API Configuration Details
@@ -301,6 +311,34 @@ The `SILENCE_TIMEOUT` setting controls how long the application waits for silenc
 - `5000` = 5 seconds (default)
 - `10000` = 10 seconds
 - `3000` = 3 seconds
+
+### Server Configuration
+
+The `HOST` and `PORT` settings control where the application listens for connections:
+
+**HOST Options:**
+- `0.0.0.0` = Listen on all network interfaces (default) - allows external access
+- `127.0.0.1` = Listen only on localhost - local access only
+- Specific IP = Listen only on that IP address
+
+**PORT Options:**
+- `8000` = Default port
+- Any available port number (1024-65535 recommended for non-root users)
+
+**Examples:**
+```env
+# For local development only
+HOST=127.0.0.1
+PORT=8000
+
+# For EC2/server deployment (external access)
+HOST=0.0.0.0
+PORT=8000
+
+# Custom port
+HOST=0.0.0.0
+PORT=3000
+```
 
 ## 📁 Project Structure
 
@@ -360,7 +398,23 @@ realtime-stt-compare/
 **Solution**:
 - Find the process using port 8000: `lsof -i :8000`
 - Kill the process: `kill -9 <PID>`
-- Or change the port in `voicesearch_app.py` (line 321)
+- Or change the port in `voicesearch_app.py` (line 602)
+
+### Issue: Cannot access from external IP (EC2/Server)
+
+**Solution**:
+- The app now binds to `0.0.0.0:8000` for external access
+- **Security Group**: Make sure port 8000 is open in your EC2 security group:
+  - Type: Custom TCP
+  - Port: 8000
+  - Source: 0.0.0.0/0 (or your specific IP range)
+- **Firewall**: On Ubuntu, check if ufw is blocking:
+  ```bash
+  sudo ufw status
+  sudo ufw allow 8000
+  ```
+- **Access URL**: Use your EC2 public IP: `http://YOUR_EC2_PUBLIC_IP:8000`
+- **HTTPS**: For microphone access, you may need HTTPS or use ngrok
 
 ### Issue: "Module not found" errors
 

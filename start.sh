@@ -17,12 +17,59 @@
 
 set -e
 
+# Colors for output
+GREEN='\033[0;32m'
+BLUE='\033[0;34m'
+YELLOW='\033[1;33m'
+RED='\033[0;31m'
+NC='\033[0m' # No Color
+
+# Function to print colored messages
+print_info() {
+    echo -e "${BLUE}[INFO]${NC} $1"
+}
+
+print_success() {
+    echo -e "${GREEN}[SUCCESS]${NC} $1"
+}
+
+print_warning() {
+    echo -e "${YELLOW}[WARNING]${NC} $1"
+}
+
+print_error() {
+    echo -e "${RED}[ERROR]${NC} $1"
+}
+
+# Function to read .env file and get a value
+get_env_value() {
+    local key="$1"
+    local default="$2"
+    local value=""
+    
+    if [ -f ".env" ]; then
+        # Read the value from .env file, handling quotes and comments
+        value=$(grep "^${key}=" .env | head -1 | cut -d'=' -f2- | sed 's/^["'\'']//' | sed 's/["'\'']$//' | sed 's/#.*//')
+    fi
+    
+    # Return default if empty
+    if [ -z "$value" ]; then
+        echo "$default"
+    else
+        echo "$value"
+    fi
+}
+
+# Get HOST and PORT from .env file early for help display
+APP_HOST=$(get_env_value "HOST" "0.0.0.0")
+APP_PORT=$(get_env_value "PORT" "8000")
+
 # Show help if requested
 if [ "$1" == "--help" ] || [ "$1" == "-h" ]; then
     echo "VoiceSearch App Startup Script"
     echo ""
     echo "Usage:"
-    echo "  ./start.sh start            Start the app locally on http://localhost:8000 (background)"
+    echo "  ./start.sh start            Start the app on ${APP_HOST}:${APP_PORT} (background)"
     echo "  ./start.sh start --ngrok    Start the app with ngrok tunnel (background)"
     echo "  ./start.sh start -n         Short form for ngrok option (background)"
     echo "  ./start.sh stop             Stop the running app and ngrok tunnel"
@@ -32,6 +79,11 @@ if [ "$1" == "--help" ] || [ "$1" == "-h" ]; then
     echo "Legacy usage (deprecated):"
     echo "  ./start.sh                  Start the app in foreground (legacy mode)"
     echo "  ./start.sh --ngrok          Start with ngrok in foreground (legacy mode)"
+    echo ""
+    echo "EC2/Server Usage:"
+    echo "  The app binds to ${APP_HOST}:${APP_PORT} for external access"
+    echo "  Make sure port ${APP_PORT} is open in your security group"
+    echo "  Access via: http://YOUR_EC2_PUBLIC_IP:${APP_PORT}"
     echo ""
     echo "Requirements:"
     echo "  - Python 3.x"
@@ -49,19 +101,13 @@ if [ "$1" == "--help" ] || [ "$1" == "-h" ]; then
     exit 0
 fi
 
-# Colors for output
-GREEN='\033[0;32m'
-BLUE='\033[0;34m'
-YELLOW='\033[1;33m'
-RED='\033[0;31m'
-NC='\033[0m' # No Color
-
 # Configuration
-APP_PORT=8000
 APP_FILE="voicesearch_app.py"
 NGROK_PID_FILE=".ngrok.pid"
 APP_PID_FILE=".app.pid"
 LOG_FILE="voicesearch_app.log"
+
+# HOST and PORT are already loaded above for help display
 
 # Parse command line arguments
 COMMAND=""
@@ -96,23 +142,6 @@ else
     print_info "Use './start.sh --help' for usage information"
     exit 1
 fi
-
-# Function to print colored messages
-print_info() {
-    echo -e "${BLUE}[INFO]${NC} $1"
-}
-
-print_success() {
-    echo -e "${GREEN}[SUCCESS]${NC} $1"
-}
-
-print_warning() {
-    echo -e "${YELLOW}[WARNING]${NC} $1"
-}
-
-print_error() {
-    echo -e "${RED}[ERROR]${NC} $1"
-}
 
 # Function to cleanup on exit
 cleanup() {
@@ -208,7 +237,10 @@ check_status() {
         APP_PID=$(cat "$APP_PID_FILE")
         if ps -p "$APP_PID" > /dev/null 2>&1; then
             print_success "Flask app is running (PID: $APP_PID)"
-            print_info "Local URL: http://localhost:$APP_PORT"
+            print_info "Local URL: http://${APP_HOST}:${APP_PORT}"
+            if [ "$APP_HOST" = "0.0.0.0" ]; then
+                print_info "External URL: http://YOUR_EC2_PUBLIC_IP:${APP_PORT}"
+            fi
             app_running=true
         else
             print_warning "Flask app PID file exists but process is not running"
@@ -438,7 +470,7 @@ except:
 fi
 
 # Start Flask application
-print_info "Starting VoiceSearch application on port $APP_PORT..."
+print_info "Starting VoiceSearch application on ${APP_HOST}:${APP_PORT}..."
 
 if [ "$BACKGROUND_MODE" = false ]; then
     print_info "Press Ctrl+C to stop the application"
@@ -447,7 +479,10 @@ fi
 if [ "$USE_NGROK" = true ]; then
     print_info "App will be accessible via ngrok tunnel"
 else
-    print_info "App will be accessible at: http://localhost:$APP_PORT"
+    print_info "App will be accessible at: http://${APP_HOST}:${APP_PORT}"
+    if [ "$APP_HOST" = "0.0.0.0" ]; then
+        print_info "External access: http://YOUR_EC2_PUBLIC_IP:${APP_PORT}"
+    fi
 fi
 
 echo ""
@@ -503,7 +538,10 @@ if [ "$USE_NGROK" = true ]; then
     echo -e "${GREEN}  📊 ngrok Dashboard: ${BLUE}http://localhost:4040${NC}"
 else
     echo -e "${GREEN}  ✅ Application is running${NC}"
-    echo -e "${GREEN}  🔗 Local URL: ${BLUE}http://localhost:$APP_PORT${NC}"
+    echo -e "${GREEN}  🔗 Local URL: ${BLUE}http://${APP_HOST}:${APP_PORT}${NC}"
+    if [ "$APP_HOST" = "0.0.0.0" ]; then
+        echo -e "${GREEN}  🌐 External URL: ${BLUE}http://YOUR_EC2_PUBLIC_IP:${APP_PORT}${NC}"
+    fi
 fi
 echo -e "${GREEN}═══════════════════════════════════════════════════════════${NC}"
 echo ""

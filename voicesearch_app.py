@@ -157,6 +157,10 @@ else:
 SILENCE_TIMEOUT_MS = int(os.getenv("SILENCE_TIMEOUT", "5000"))  # Default 5 seconds if not set
 SILENCE_TIMEOUT_SEC = SILENCE_TIMEOUT_MS / 1000.0
 
+# Get server configuration from environment
+HOST = os.getenv("HOST", "0.0.0.0")  # Default to 0.0.0.0 for external access
+PORT = int(os.getenv("PORT", "8000"))  # Default to port 8000
+
 # Track performance metrics
 session_start_time = None
 transcription_count = 0
@@ -598,5 +602,5 @@ def restart_deepgram(data):
     initialize_deepgram_connection(language_name)
 
 if __name__ == '__main__':
-    logger.info("Starting Flask-SocketIO server on port 8000")
-    socketio.run(app, debug=True, allow_unsafe_werkzeug=True, port=8000)
+    logger.info(f"Starting Flask-SocketIO server on {HOST}:{PORT}")
+    socketio.run(app, debug=True, allow_unsafe_werkzeug=True, host=HOST, port=PORT)
