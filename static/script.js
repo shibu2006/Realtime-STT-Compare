@@ -28,9 +28,11 @@ socket.on("transcription_status", (data) => {
     console.error("Transcription error:", data.message);
     alert(`Transcription error: ${data.message}`);
     connectionReady = false;
+    isTranscribing = false;
   } else if (data.status === "started") {
     // Backend connection is ready - flush any buffered audio
     connectionReady = true;
+    isTranscribing = true;
     console.log(`✅ Backend connection ready. Flushing ${pendingAudioChunks.length} buffered audio chunks...`);
     
     // Send all buffered audio chunks
@@ -41,6 +43,7 @@ socket.on("transcription_status", (data) => {
     console.log("✅ Buffered audio flushed");
   } else if (data.status === "stopped") {
     connectionReady = false;
+    isTranscribing = false;
     // If recording is still active, stop it
     if (isRecording) {
       stopRecording().catch((error) =>
@@ -62,6 +65,10 @@ socket.on("silence_timeout", (data) => {
   }
 });
 
+let currentTranscription = ""; // Store accumulated transcription
+let isTranscribing = false; // Track if we're currently transcribing
+let stopTimeout = null; // Timeout for delayed stop
+
 socket.on("transcription_update", (data) => {
   console.log("✅ Received transcription_update event:", data);
   const searchInput = document.getElementById("searchInput");
@@ -70,14 +77,50 @@ socket.on("transcription_update", (data) => {
     return;
   }
   if (data && data.transcription !== undefined && data.transcription !== null) {
-    // Update the input field with the transcription
-    // Allow empty strings to clear the field if needed
-    const oldValue = searchInput.value;
-    searchInput.value = data.transcription;
-    console.log(`✅ Updated search input: "${oldValue}" -> "${data.transcription}"`);
+    const newTranscription = data.transcription.trim();
     
-    // Also trigger input event to ensure any listeners are notified
-    searchInput.dispatchEvent(new Event('input', { bubbles: true }));
+    // Debug logging to understand transcription behavior
+    console.log(`📝 Transcription received: "${newTranscription}"`);
+    console.log(`📝 Current transcription: "${currentTranscription}"`);
+    console.log(`📝 Current input value: "${searchInput.value}"`);
+    
+    if (newTranscription) {
+      // Get current API to handle transcription differently
+      const apiSelect = document.getElementById("apiSelect");
+      const selectedAPI = apiSelect ? apiSelect.value : "Deepgram API";
+      
+      if (selectedAPI === "ElvenLabs ScribeV2") {
+        // ElevenLabs sends both partial and final transcripts
+        // Always use the latest transcription (don't accumulate)
+        // ElevenLabs handles accumulation on their end
+        currentTranscription = newTranscription;
+        console.log(`📝 ElevenLabs: Using latest transcription: "${currentTranscription}"`);
+      } else if (selectedAPI === "Azure OpenAI") {
+        // Azure OpenAI sends accumulated transcription
+        currentTranscription = newTranscription;
+        console.log(`📝 Azure OpenAI: Using accumulated transcription: "${currentTranscription}"`);
+      } else {
+        // Deepgram API: accumulate transcriptions by appending new chunks
+        if (currentTranscription === "") {
+          // First transcription chunk
+          currentTranscription = newTranscription;
+        } else if (newTranscription.toLowerCase().startsWith(currentTranscription.toLowerCase())) {
+          // This is an extension of current transcription (Deepgram refining)
+          currentTranscription = newTranscription;
+        } else {
+          // This is a new chunk - append it
+          currentTranscription += " " + newTranscription;
+        }
+        console.log(`📝 Deepgram: Accumulated transcription: "${currentTranscription}"`);
+      }
+      
+      const oldValue = searchInput.value;
+      searchInput.value = currentTranscription;
+      console.log(`✅ Updated search input: "${oldValue}" -> "${currentTranscription}"`);
+      
+      // Also trigger input event to ensure any listeners are notified
+      searchInput.dispatchEvent(new Event('input', { bubbles: true }));
+    }
   } else {
     console.warn("⚠️ transcription_update received but transcription field is missing or invalid:", data);
   }
@@ -204,8 +247,12 @@ async function openMicrophone(microphone, socket, useWebAudio = false) {
         document.body.classList.add("recording");
         const micButton = document.getElementById("micButton");
         const languageSelect = document.getElementById("languageSelect");
-        micButton.classList.add("recording");
-        languageSelect.disabled = true;
+        if (micButton) {
+          micButton.classList.add("recording");
+        }
+        if (languageSelect) {
+          languageSelect.disabled = true;
+        }
         resolve();
       } catch (error) {
         console.error("Error setting up Web Audio API:", error);
@@ -220,8 +267,12 @@ async function openMicrophone(microphone, socket, useWebAudio = false) {
         document.body.classList.add("recording");
         const micButton = document.getElementById("micButton");
         const languageSelect = document.getElementById("languageSelect");
-        micButton.classList.add("recording");
-        languageSelect.disabled = true;
+        if (micButton) {
+          micButton.classList.add("recording");
+        }
+        if (languageSelect) {
+          languageSelect.disabled = true;
+        }
         resolve();
       };
       microphone.recorder.ondataavailable = async (event) => {
@@ -240,15 +291,19 @@ async function openMicrophone(microphone, socket, useWebAudio = false) {
 
 async function startRecording() {
   isRecording = true;
+  isTranscribing = false; // Will be set to true when transcription_status "started" is received
   connectionReady = false; // Reset connection state
   pendingAudioChunks = []; // Clear any old buffered audio
+  currentTranscription = ""; // Reset accumulated transcription for new recording
   
   const searchInput = document.getElementById("searchInput");
-  searchInput.value = ""; // Clear the input when starting a new recording
+  if (searchInput) {
+    searchInput.value = ""; // Clear the input when starting a new recording
+  }
   
   // Check which API is selected to determine audio capture method
   const apiSelect = document.getElementById("apiSelect");
-  const useWebAudio = apiSelect.value === "Azure OpenAI" || apiSelect.value === "ElvenLabs ScribeV2"; // Use Web Audio API for Azure OpenAI and ElevenLabs
+  const useWebAudio = apiSelect && (apiSelect.value === "Azure OpenAI" || apiSelect.value === "ElvenLabs ScribeV2"); // Use Web Audio API for Azure OpenAI and ElevenLabs
   
   // For non-Azure APIs, mark connection as ready immediately (they don't need buffering)
   if (!useWebAudio) {
@@ -377,6 +432,13 @@ document.addEventListener("DOMContentLoaded", () => {
     
     if (isRecording) return; // Already recording
     
+    // Clear any pending stop timeout if user presses mic again
+    if (stopTimeout) {
+      console.log("🔄 Clearing pending stop timeout - user pressed mic again");
+      clearTimeout(stopTimeout);
+      stopTimeout = null;
+    }
+    
     if (!socket.connected) {
       console.error("Socket not connected. Please refresh the page.");
       alert("Connection lost. Please refresh the page.");
@@ -386,6 +448,8 @@ document.addEventListener("DOMContentLoaded", () => {
     // Add pressed visual feedback - with null check
     if (micButton) {
       micButton.classList.add("pressed");
+      micButton.style.opacity = ""; // Restore opacity if it was dimmed
+      micButton.title = "Hold to speak (or press and hold spacebar)"; // Restore title
     }
     
     const selectedLanguage = languageSelect ? languageSelect.value : "English";
@@ -400,7 +464,7 @@ document.addEventListener("DOMContentLoaded", () => {
     );
   };
 
-  // Function to stop recording
+  // Function to stop recording with delay for transcription completion
   const stopRecordingHandler = () => {
     const now = Date.now();
     if (now - lastStopTime < DEBOUNCE_DELAY) {
@@ -416,14 +480,39 @@ document.addEventListener("DOMContentLoaded", () => {
     // Only send stop if we were actually recording
     if (!isRecording) return;
     
-    const selectedAPI = apiSelect ? apiSelect.value : "Deepgram API";
-    socket.emit("toggle_transcription", { 
-      action: "stop",
-      api: selectedAPI
-    });
-    stopRecording().catch((error) =>
-      console.error("Error stopping recording:", error)
-    );
+    // Clear any existing stop timeout
+    if (stopTimeout) {
+      clearTimeout(stopTimeout);
+    }
+    
+    // Add a delay before actually stopping to allow final transcription chunks
+    console.log("🔄 Mic released - waiting 1.5 seconds for final transcription...");
+    
+    // Add visual feedback that transcription is still processing
+    if (micButton) {
+      micButton.style.opacity = "0.7";
+      micButton.title = "Processing final transcription...";
+    }
+    
+    stopTimeout = setTimeout(() => {
+      console.log("⏹️ Stopping transcription after delay");
+      
+      // Restore visual state
+      if (micButton) {
+        micButton.style.opacity = "";
+        micButton.title = "Hold to speak (or press and hold spacebar)";
+      }
+      
+      const selectedAPI = apiSelect ? apiSelect.value : "Deepgram API";
+      socket.emit("toggle_transcription", { 
+        action: "stop",
+        api: selectedAPI
+      });
+      stopRecording().catch((error) =>
+        console.error("Error stopping recording:", error)
+      );
+      stopTimeout = null;
+    }, 1500); // 1.5 second delay to allow final transcription chunks
   };
 
   // Mouse events for desktop
