@@ -350,6 +350,9 @@ body {
 }
 
 .recent-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
   padding: 10px 16px;
   background: var(--bg-card);
   border: 1px solid var(--border-color);
@@ -359,6 +362,36 @@ body {
   font-weight: 500;
   cursor: pointer;
   transition: all 0.2s ease;
+}
+
+.provider-badge {
+  font-size: 0.65rem;
+  padding: 2px 8px;
+  border-radius: 12px;
+  background-color: #f1f5f9;
+  color: #64748b;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+}
+
+.badge-deepgram {
+  background-color: #eff6ff;
+  color: #3b82f6;
+  border: 1px solid #dbeafe;
+}
+
+.badge-azure {
+  background-color: #f0fdf4;
+  color: #22c55e;
+  border: 1px solid #dcfce7;
+}
+
+.badge-elevenlabs {
+  background-color: #faf5ff;
+  color: #a855f7;
+  border: 1px solid #f3e8ff;
 }
 
 .recent-item:hover {

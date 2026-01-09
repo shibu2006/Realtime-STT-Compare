@@ -508,7 +508,7 @@ def handle_audio_stream(data):
                 logger.debug(f"⏳ Audio not sent yet - Azure OpenAI connection establishing for session {session.session_id} ({len(audio_bytes)} bytes)")
         else:
             logger.warning(f"Audio stream received but Azure OpenAI is not available for session {session.session_id}")
-    elif session.current_api_provider == "ElvenLabs ScribeV2":
+    elif session.current_api_provider == "ElevenLabs ScribeV2":
         if ELEVENLABS_AVAILABLE:
             # ElevenLabs expects PCM16 format at 16kHz - need to resample from 24kHz
             # The browser sends 24kHz, ElevenLabs needs 16kHz
@@ -563,7 +563,7 @@ def handle_toggle_transcription(data):
                     'status': 'error',
                     'message': 'Failed to start Azure OpenAI connection'
                 }, room=session.session_id)
-        elif api_provider == "ElvenLabs ScribeV2":
+        elif api_provider == "ElevenLabs ScribeV2":
             if not ELEVENLABS_AVAILABLE:
                 socketio.emit('transcription_status', {
                     'status': 'error',
@@ -609,7 +609,7 @@ def handle_toggle_transcription(data):
             logger.info(f"Stopping Azure OpenAI connection for session {session.session_id}")
             close_azure_openai_connection(session.session_id)
             socketio.emit('transcription_status', {'status': 'stopped'}, room=session.session_id)
-        elif api_provider == "ElvenLabs ScribeV2":
+        elif api_provider == "ElevenLabs ScribeV2":
             logger.info(f"Stopping ElevenLabs connection for session {session.session_id}")
             if ELEVENLABS_AVAILABLE:
                 close_elevenlabs_connection(session.session_id)

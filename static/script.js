@@ -25,7 +25,16 @@ const MAX_RECENT_ITEMS = 10;
 function getRecentTranscriptions() {
   try {
     const stored = localStorage.getItem(RECENT_TRANSCRIPTIONS_KEY);
-    return stored ? JSON.parse(stored) : [];
+    if (!stored) return [];
+
+    const parsed = JSON.parse(stored);
+
+    // Migration: Convert old string array to object array
+    if (Array.isArray(parsed) && parsed.length > 0 && typeof parsed[0] === 'string') {
+      return parsed.map(text => ({ text, provider: 'Deepgram API' })); // Default to Deepgram for old items
+    }
+
+    return parsed;
   } catch (e) {
     console.error('Error loading recent transcriptions:', e);
     return [];
@@ -42,23 +51,28 @@ function saveRecentTranscriptions(items) {
 }
 
 // Add a new transcription to recent list
-function addRecentTranscription(text) {
+function addRecentTranscription(text, provider) {
   if (!text || text.trim().length === 0) return;
-  
+
   const trimmedText = text.trim();
+  const providerName = provider || 'Unknown';
+
   let recent = getRecentTranscriptions();
-  
-  // Remove duplicate if exists
-  recent = recent.filter(item => item.toLowerCase() !== trimmedText.toLowerCase());
-  
+
+  // Remove duplicate if exists (checking both text and provider, or just text? 
+  // User might want to try same text with different provider. 
+  // Let's filter by text only to avoid cluttering with same text multiple times, 
+  // but maybe we update the provider? Let's keep it simple: unique by text).
+  recent = recent.filter(item => item.text.toLowerCase() !== trimmedText.toLowerCase());
+
   // Add to beginning
-  recent.unshift(trimmedText);
-  
+  recent.unshift({ text: trimmedText, provider: providerName });
+
   // Keep only max items
   if (recent.length > MAX_RECENT_ITEMS) {
     recent = recent.slice(0, MAX_RECENT_ITEMS);
   }
-  
+
   saveRecentTranscriptions(recent);
   renderRecentTranscriptions();
 }
@@ -73,31 +87,48 @@ function clearRecentTranscriptions() {
 function renderRecentTranscriptions() {
   const container = document.getElementById('recentItems');
   const section = document.getElementById('recentSection');
-  
+
   if (!container || !section) return;
-  
+
   const recent = getRecentTranscriptions();
-  
+
   if (recent.length === 0) {
     section.style.display = 'none';
     return;
   }
-  
+
   section.style.display = 'block';
   container.innerHTML = '';
-  
-  recent.forEach((text) => {
-    const item = document.createElement('button');
-    item.className = 'recent-item';
-    item.textContent = `"${text}"`;
-    item.addEventListener('click', () => {
+
+  recent.forEach((item) => {
+    const button = document.createElement('button');
+    button.className = 'recent-item';
+
+    // Create text span
+    const textSpan = document.createElement('span');
+    textSpan.textContent = `"${item.text}"`;
+
+    // Create provider badge
+    const badge = document.createElement('span');
+    badge.className = 'provider-badge';
+    badge.textContent = item.provider;
+
+    // Style badge based on provider (optional, can be done via CSS classes)
+    if (item.provider === 'Deepgram API') badge.classList.add('badge-deepgram');
+    else if (item.provider === 'Azure OpenAI') badge.classList.add('badge-azure');
+    else if (item.provider === 'ElevenLabs ScribeV2' || item.provider === 'ElvenLabs ScribeV2') badge.classList.add('badge-elevenlabs');
+
+    button.appendChild(textSpan);
+    button.appendChild(badge);
+
+    button.addEventListener('click', () => {
       const searchInput = document.getElementById('searchInput');
       if (searchInput) {
-        searchInput.value = text;
+        searchInput.value = item.text;
         searchInput.focus();
       }
     });
-    container.appendChild(item);
+    container.appendChild(button);
   });
 }
 
@@ -174,7 +205,7 @@ socket.on("transcription_update", (data) => {
       const apiSelect = document.getElementById("apiSelect");
       const selectedAPI = apiSelect ? apiSelect.value : "Deepgram API";
 
-      if (selectedAPI === "ElvenLabs ScribeV2") {
+      if (selectedAPI === "ElevenLabs ScribeV2") {
         currentTranscription = newTranscription;
       } else if (selectedAPI === "Azure OpenAI") {
         currentTranscription = newTranscription;
@@ -418,7 +449,7 @@ async function startRecording() {
   }
 
   const apiSelect = document.getElementById("apiSelect");
-  const useWebAudio = apiSelect && (apiSelect.value === "Azure OpenAI" || apiSelect.value === "ElvenLabs ScribeV2");
+  const useWebAudio = apiSelect && (apiSelect.value === "Azure OpenAI" || apiSelect.value === "ElevenLabs ScribeV2");
 
   if (!useWebAudio) {
     connectionReady = true;
@@ -597,7 +628,7 @@ const stopRecordingHandler = () => {
 
     // Save transcription to recent list before stopping
     if (currentTranscription && currentTranscription.trim().length > 0) {
-      addRecentTranscription(currentTranscription);
+      addRecentTranscription(currentTranscription, selectedAPI);
     }
 
     if (socket.connected) {
@@ -641,7 +672,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
     languageSelect.innerHTML = '';
 
-    if (selectedAPI === "Azure OpenAI" || selectedAPI === "ElvenLabs ScribeV2") {
+    if (selectedAPI === "Azure OpenAI" || selectedAPI === "ElevenLabs ScribeV2") {
       const autoOption = allLanguageOptions.find(opt => opt.value === "Auto");
       if (autoOption) {
         languageSelect.appendChild(new Option(autoOption.text, autoOption.value, true, true));
