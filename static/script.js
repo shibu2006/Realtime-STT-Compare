@@ -84,6 +84,17 @@ function clearRecentTranscriptions() {
 }
 
 // Render recent transcriptions in the UI
+// Delete a specific transcription from recent list
+function deleteRecentTranscription(index) {
+  let recent = getRecentTranscriptions();
+  if (index >= 0 && index < recent.length) {
+    recent.splice(index, 1);
+    saveRecentTranscriptions(recent);
+    renderRecentTranscriptions();
+  }
+}
+
+// Render recent transcriptions in the UI
 function renderRecentTranscriptions() {
   const container = document.getElementById('recentItems');
   const section = document.getElementById('recentSection');
@@ -100,9 +111,15 @@ function renderRecentTranscriptions() {
   section.style.display = 'block';
   container.innerHTML = '';
 
-  recent.forEach((item) => {
-    const button = document.createElement('button');
-    button.className = 'recent-item';
+  recent.forEach((item, index) => {
+    // Main container
+    const wrapper = document.createElement('div');
+    wrapper.className = 'recent-item-wrapper';
+
+    const button = document.createElement('div');
+    button.className = 'recent-item'; // functionality moved to click listener on wrapper or button? 
+    // Let's keep button as a div to avoid nested button issues if we add a delete button inside.
+    // Actually, making the whole thing a div and handling clicks is easier.
 
     // Create text span
     const textSpan = document.createElement('span');
@@ -113,13 +130,24 @@ function renderRecentTranscriptions() {
     badge.className = 'provider-badge';
     badge.textContent = item.provider;
 
-    // Style badge based on provider (optional, can be done via CSS classes)
+    // Style badge based on provider
     if (item.provider === 'Deepgram API') badge.classList.add('badge-deepgram');
     else if (item.provider === 'Azure OpenAI') badge.classList.add('badge-azure');
     else if (item.provider === 'ElevenLabs ScribeV2' || item.provider === 'ElvenLabs ScribeV2') badge.classList.add('badge-elevenlabs');
 
+    // Create delete button
+    const deleteBtn = document.createElement('button');
+    deleteBtn.className = 'recent-item-delete';
+    deleteBtn.innerHTML = '<i class="fas fa-times"></i>';
+    deleteBtn.title = "Remove item";
+    deleteBtn.onclick = (e) => {
+      e.stopPropagation();
+      deleteRecentTranscription(index);
+    };
+
     button.appendChild(textSpan);
     button.appendChild(badge);
+    button.appendChild(deleteBtn);
 
     button.addEventListener('click', () => {
       const searchInput = document.getElementById('searchInput');
@@ -128,6 +156,7 @@ function renderRecentTranscriptions() {
         searchInput.focus();
       }
     });
+
     container.appendChild(button);
   });
 }
