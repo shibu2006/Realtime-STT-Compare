@@ -56,7 +56,8 @@ class ElevenLabsSession:
         self.transcription_count = 0
         self.last_transcription_time = None
         self.last_audio_send_time = None
-        self.current_transcript = ""
+        self.current_transcript = ""  # Full transcript shown to user (accumulated + current partial)
+        self.accumulated_transcript = ""  # Finalized/committed segments only
         self.connection_open = False
         self.session_started = threading.Event()
         self.silence_timer = None
@@ -72,6 +73,7 @@ class ElevenLabsSession:
         self.last_transcription_time = None
         self.last_audio_send_time = None
         self.current_transcript = ""
+        self.accumulated_transcript = ""
 
 def get_elevenlabs_session(session_id: str, socketio: SocketIO) -> ElevenLabsSession:
     """Get or create ElevenLabs session for user"""
@@ -142,6 +144,7 @@ def handle_elevenlabs_silence_timeout(session: ElevenLabsSession):
         session.last_transcription_time = None
         session.last_audio_send_time = None
         session.current_transcript = ""
+        session.accumulated_transcript = ""
     
     # Notify ONLY this specific user to stop recording
     session.socketio.emit('silence_timeout', {
@@ -317,15 +320,32 @@ def handle_elevenlabs_message(session: ElevenLabsSession, message: str):
             if text:
                 # Reset silence timer on partial transcript
                 reset_elevenlabs_silence_timer(session)
-                logger.info(f"ElevenLabs partial transcript for session {session.session_id}: {text}")
-                # Emit partial transcript for real-time feedback
-                session.socketio.emit('transcription_update', {'transcription': text}, room=session.session_id)
-                logger.info(f"✅ Emitted transcription_update event for session {session.session_id} with partial: '{text}'")
+                
+                # Build the full display transcript: accumulated segments + current partial
+                if session.accumulated_transcript and session.accumulated_transcript.strip():
+                    session.current_transcript = session.accumulated_transcript.strip() + " " + text.strip()
+                else:
+                    session.current_transcript = text.strip()
+                
+                logger.info(f"ElevenLabs partial transcript for session {session.session_id}: {text} | Display: {session.current_transcript}")
+                # Emit the full transcript (accumulated + partial) for real-time feedback
+                session.socketio.emit('transcription_update', {'transcription': session.current_transcript}, room=session.session_id)
+                logger.info(f"✅ Emitted transcription_update event for session {session.session_id} with partial: '{session.current_transcript}'")
         
         elif message_type in ("committed_transcript", "final_transcript", "committed_transcript_with_timestamps"):
             text = data.get("text", "")
             if text:
-                session.current_transcript = text
+                # Add this segment to accumulated transcripts
+                # This ensures pauses during speech don't break the transcription
+                if session.accumulated_transcript and session.accumulated_transcript.strip():
+                    # Add space separator and append new segment
+                    session.accumulated_transcript = session.accumulated_transcript.strip() + " " + text.strip()
+                else:
+                    session.accumulated_transcript = text.strip()
+                
+                # Update current_transcript to match accumulated (no pending partial)
+                session.current_transcript = session.accumulated_transcript
+                
                 current_time = time.perf_counter()
                 
                 # Calculate performance metrics
@@ -349,15 +369,16 @@ def handle_elevenlabs_message(session: ElevenLabsSession, message: str):
                     f"ResponseTime: {transcription_response_time_ms:.2f}ms | "
                     f"TimeSinceStart: {time_since_start_ms:.2f}ms | "
                     f"TimeSinceLast: {time_since_last_ms:.2f}ms | "
-                    f"Text: \"{text}\""
+                    f"Text: \"{session.current_transcript}\""
                 )
                 
                 # Reset silence timer
                 reset_elevenlabs_silence_timer(session)
                 
-                logger.info(f"ElevenLabs final transcript for session {session.session_id}: {text}")
-                session.socketio.emit('transcription_update', {'transcription': text}, room=session.session_id)
-                logger.info(f"✅ Emitted transcription_update event for session {session.session_id} with final: '{text}'")
+                logger.info(f"ElevenLabs committed transcript for session {session.session_id}: {text} | Accumulated: {session.accumulated_transcript}")
+                # Send the accumulated transcript to the frontend
+                session.socketio.emit('transcription_update', {'transcription': session.current_transcript}, room=session.session_id)
+                logger.info(f"✅ Emitted transcription_update event for session {session.session_id} with final: '{session.current_transcript}'")
         
         elif message_type == "commit_throttled":
             logger.warning(f"⚠️ ElevenLabs commit throttled for session {session.session_id}")
@@ -499,5 +520,6 @@ def close_elevenlabs_connection(session_id: str = None):
     
     # Reset transcript
     session.current_transcript = ""
+    session.accumulated_transcript = ""
     
     logger.info(f"🔌 ElevenLabs disconnected for session {session.session_id}")

@@ -64,7 +64,9 @@ class AzureSession:
         self.transcription_count = 0
         self.last_transcription_time = None
         self.last_audio_send_time = None
-        self.current_transcript = ""
+        self.current_transcript = ""  # Full transcript shown to user (accumulated + current segment)
+        self.accumulated_transcript = ""  # Finalized/completed segments only
+        self.current_segment_transcript = ""  # Current segment being transcribed (from deltas)
         self.connection_open = False
         self.silence_timer = None
         self.language = "Auto"
@@ -79,6 +81,8 @@ class AzureSession:
         self.last_transcription_time = None
         self.last_audio_send_time = None
         self.current_transcript = ""
+        self.accumulated_transcript = ""
+        self.current_segment_transcript = ""
 
 def get_azure_session(session_id: str, socketio: SocketIO) -> AzureSession:
     """Get or create Azure session for user"""
@@ -146,6 +150,8 @@ def handle_azure_silence_timeout(session: AzureSession):
         session.last_transcription_time = None
         session.last_audio_send_time = None
         session.current_transcript = ""
+        session.accumulated_transcript = ""
+        session.current_segment_transcript = ""
     
     # Notify ONLY this specific user to stop recording
     session.socketio.emit('silence_timeout', {
@@ -305,8 +311,15 @@ def initialize_azure_openai_connection(socketio_instance: SocketIO, language_nam
             if event_type == "conversation.item.input_audio_transcription.delta":
                 transcript_piece = data.get("delta", "")
                 if transcript_piece:
-                    # Accumulate the delta into the current transcript
-                    session.current_transcript += transcript_piece
+                    # Accumulate the delta into the current segment transcript
+                    session.current_segment_transcript += transcript_piece
+                    
+                    # Build full display transcript: accumulated + current segment
+                    if session.accumulated_transcript and session.accumulated_transcript.strip():
+                        session.current_transcript = session.accumulated_transcript.strip() + " " + session.current_segment_transcript.strip()
+                    else:
+                        session.current_transcript = session.current_segment_transcript.strip()
+                    
                     current_time = time.perf_counter()
                     
                     # Calculate performance metrics
@@ -337,16 +350,27 @@ def initialize_azure_openai_connection(socketio_instance: SocketIO, language_nam
                     # Reset silence timer when transcription is received
                     reset_azure_silence_timer(session)
                     
-                    logger.info(f"Azure OpenAI transcript delta for session {session.session_id}: '{transcript_piece}' | Full: '{session.current_transcript}'")
+                    logger.info(f"Azure OpenAI transcript delta for session {session.session_id}: '{transcript_piece}' | Segment: '{session.current_segment_transcript}' | Full: '{session.current_transcript}'")
                     # Send transcription ONLY to the specific user who is speaking
                     session.socketio.emit('transcription_update', {'transcription': session.current_transcript}, room=session.session_id)
                     logger.info(f"✅ Emitted transcription_update event for session {session.session_id} with: '{session.current_transcript}'")
             
-            # Handle other transcription events similarly...
+            # Handle completed/final transcription events - finalize the segment
             elif event_type in ["conversation.item.input_audio_transcription.completed", "conversation.item.input_audio_transcription.final"]:
                 transcript = data.get("transcript", "")
                 if transcript:
-                    session.current_transcript = transcript
+                    # Add this completed segment to accumulated transcript
+                    if session.accumulated_transcript and session.accumulated_transcript.strip():
+                        session.accumulated_transcript = session.accumulated_transcript.strip() + " " + transcript.strip()
+                    else:
+                        session.accumulated_transcript = transcript.strip()
+                    
+                    # Reset current segment (it's now part of accumulated)
+                    session.current_segment_transcript = ""
+                    
+                    # Update display transcript
+                    session.current_transcript = session.accumulated_transcript
+                    
                     current_time = time.perf_counter()
                     
                     # Calculate performance metrics
@@ -366,24 +390,26 @@ def initialize_azure_openai_connection(socketio_instance: SocketIO, language_nam
                     
                     # Log performance metrics
                     performance_logger.info(
-                        f"TRANSCRIPTION | Session: {session.session_id} | Count: {session.transcription_count} | "
+                        f"TRANSCRIPTION_COMPLETED | Session: {session.session_id} | Count: {session.transcription_count} | "
                         f"ResponseTime: {transcription_response_time_ms:.2f}ms | "
                         f"TimeSinceStart: {time_since_start_ms:.2f}ms | "
                         f"TimeSinceLast: {time_since_last_ms:.2f}ms | "
-                        f"Text: \"{session.current_transcript}\""
+                        f"Segment: \"{transcript}\" | Accumulated: \"{session.accumulated_transcript}\""
                     )
                     
                     # Reset silence timer when transcription is received
                     reset_azure_silence_timer(session)
-                    logger.info(f"Azure OpenAI {event_type} transcript for session {session.session_id}: {transcript}")
+                    logger.info(f"Azure OpenAI {event_type} for session {session.session_id}: Segment='{transcript}' | Accumulated='{session.accumulated_transcript}'")
                     session.socketio.emit('transcription_update', {'transcription': session.current_transcript}, room=session.session_id)
                     logger.info(f"✅ Emitted transcription_update event for session {session.session_id} with {event_type}: '{session.current_transcript}'")
             
-            # Handle conversation item created (new item started - reset accumulator)
+            # Handle conversation item created (new segment started)
+            # Reset current_segment_transcript for the new utterance
             elif event_type == "conversation.item.created":
-                # Reset transcript accumulator when a new item is created
-                session.current_transcript = ""
-                logger.info(f"Azure OpenAI new conversation item created for session {session.session_id} - resetting transcript")
+                # Reset current segment for the new conversation item
+                # The previous segment should already be in accumulated_transcript via completed event
+                session.current_segment_transcript = ""
+                logger.info(f"Azure OpenAI new conversation item created for session {session.session_id} - reset segment, accumulated so far: '{session.accumulated_transcript}'")
         
         except Exception as e:
             logger.error(f"Error processing Azure OpenAI message for session {session.session_id}: {e}")
@@ -434,6 +460,8 @@ def initialize_azure_openai_connection(socketio_instance: SocketIO, language_nam
             session.transcription_count = 0
             session.last_transcription_time = None
             session.current_transcript = ""
+            session.accumulated_transcript = ""
+            session.current_segment_transcript = ""
     
     try:
         # Create WebSocket connection
@@ -612,6 +640,8 @@ def close_azure_openai_connection(session_id: str = None):
     
     # Reset transcript accumulator
     session.current_transcript = ""
+    session.accumulated_transcript = ""
+    session.current_segment_transcript = ""
     
     if session.thread and session.thread.is_alive():
         # Thread will terminate when WebSocket closes

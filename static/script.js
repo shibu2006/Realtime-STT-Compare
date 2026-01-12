@@ -261,11 +261,15 @@ socket.on("transcription_update", (data) => {
       const selectedAPI = apiSelect ? apiSelect.value : "Deepgram API";
 
       if (selectedAPI === "ElevenLabs ScribeV2") {
+        // ElevenLabs backend sends already-accumulated transcripts
+        // (handles pauses/segments server-side to combine into single response)
         currentTranscription = newTranscription;
       } else if (selectedAPI === "Azure OpenAI") {
+        // Azure OpenAI backend sends already-accumulated transcripts
+        // (handles conversation items server-side to combine into single response)
         currentTranscription = newTranscription;
       } else {
-        // Deepgram API: accumulate transcriptions
+        // Deepgram API: accumulate transcriptions client-side
         if (currentTranscription === "") {
           currentTranscription = newTranscription;
         } else if (newTranscription.toLowerCase().startsWith(currentTranscription.toLowerCase())) {
