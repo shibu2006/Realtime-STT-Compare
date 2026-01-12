@@ -116,25 +116,34 @@ if TYPE_CHECKING:
 # Load environment variables
 load_dotenv()
 
-# Configure logging
+# Configure logging - use force=True to clear any existing handlers and prevent duplicates
+# This is important as the module may be reloaded during development
+root_logger = logging.getLogger()
+
+# Clear any existing handlers to prevent duplicates
+if root_logger.handlers:
+    root_logger.handlers.clear()
+
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(name)s - %(levelname)s - %(filename)s:%(lineno)d - %(message)s',
     handlers=[
         logging.FileHandler('voicesearch_app.log'),
         logging.StreamHandler()  # Also log to console
-    ]
+    ],
+    force=True  # Python 3.8+: Forces reconfiguration even if root logger was already configured
 )
 
 logger = logging.getLogger(__name__)
 
-# Configure performance logger
+# Configure performance logger (only add handler if not already added)
 performance_logger = logging.getLogger('performance')
 performance_logger.setLevel(logging.INFO)
-performance_handler = logging.FileHandler('voicesearch_performance.log')
-performance_formatter = logging.Formatter('%(asctime)s - %(filename)s:%(lineno)d - %(message)s')
-performance_handler.setFormatter(performance_formatter)
-performance_logger.addHandler(performance_handler)
+if not performance_logger.handlers:
+    performance_handler = logging.FileHandler('voicesearch_performance.log')
+    performance_formatter = logging.Formatter('%(asctime)s - %(filename)s:%(lineno)d - %(message)s')
+    performance_handler.setFormatter(performance_formatter)
+    performance_logger.addHandler(performance_handler)
 performance_logger.propagate = False  # Don't propagate to root logger
 
 # Initialize Flask app
@@ -158,9 +167,85 @@ else:
 SILENCE_TIMEOUT_MS = int(os.getenv("SILENCE_TIMEOUT", "5000"))  # Default 5 seconds if not set
 SILENCE_TIMEOUT_SEC = SILENCE_TIMEOUT_MS / 1000.0
 
+# Get STT retry configuration from environment
+STT_RETRY_COUNT = int(os.getenv("STT_RETRY_COUNT", "3"))  # Default 3 retries
+
 # Get server configuration from environment
 HOST = os.getenv("HOST", "0.0.0.0")  # Default to 0.0.0.0 for external access
 PORT = int(os.getenv("PORT", "8000"))  # Default to port 8000
+
+def retry_with_backoff(func, max_retries=STT_RETRY_COUNT, session_id=None, service_name="Service", socketio_instance=None):
+    """
+    Retry a function with exponential backoff.
+    
+    Args:
+        func: Callable that returns True on success, False on failure
+        max_retries: Maximum number of retry attempts
+        session_id: Session ID for logging
+        service_name: Name of the service for logging
+        socketio_instance: Optional SocketIO instance for emitting retry status to frontend
+    
+    Returns:
+        bool: True if successful, False if all retries exhausted
+    """
+    logger.info(f"🔄 RETRY_START | Service: {service_name} | Session: {session_id} | MaxRetries: {max_retries}")
+    
+    if max_retries <= 0:
+        logger.info(f"🔄 RETRY_DISABLED | Service: {service_name} | Session: {session_id} | Retries disabled, attempting single connection")
+        return func()
+    
+    for attempt in range(max_retries + 1):  # +1 for initial attempt
+        logger.info(f"🔄 RETRY_ATTEMPT | Service: {service_name} | Session: {session_id} | Attempt: {attempt + 1}/{max_retries + 1}")
+        try:
+            result = func()
+            if result:
+                if attempt > 0:
+                    logger.info(f"✅ RETRY_SUCCESS | Service: {service_name} | Session: {session_id} | SucceededOnAttempt: {attempt + 1}")
+                    # Notify frontend that retry succeeded
+                    if socketio_instance and session_id:
+                        socketio_instance.emit('transcription_status', {
+                            'status': 'retrying',
+                            'message': f'{service_name} connected successfully after retry'
+                        }, room=session_id)
+                else:
+                    logger.info(f"✅ RETRY_SUCCESS | Service: {service_name} | Session: {session_id} | SucceededOnFirstAttempt")
+                return True
+            
+            if attempt < max_retries:
+                backoff_seconds = 2 ** attempt  # Exponential backoff: 1s, 2s, 4s, ...
+                logger.warning(
+                    f"⚠️ RETRY_FAILED | Service: {service_name} | Session: {session_id} | "
+                    f"Attempt: {attempt + 1} | BackoffSeconds: {backoff_seconds} | RetriesLeft: {max_retries - attempt}"
+                )
+                # Notify frontend about retry (seamlessly in background)
+                if socketio_instance and session_id:
+                    socketio_instance.emit('transcription_status', {
+                        'status': 'retrying',
+                        'message': f'Connecting to {service_name}... (attempt {attempt + 2}/{max_retries + 1})'
+                    }, room=session_id)
+                time.sleep(backoff_seconds)
+            else:
+                logger.error(f"❌ RETRY_EXHAUSTED | Service: {service_name} | Session: {session_id} | AllAttemptsFailed: {max_retries + 1}")
+                return False
+        except Exception as e:
+            if attempt < max_retries:
+                backoff_seconds = 2 ** attempt
+                logger.warning(
+                    f"⚠️ RETRY_EXCEPTION | Service: {service_name} | Session: {session_id} | "
+                    f"Attempt: {attempt + 1} | Exception: {type(e).__name__}: {e} | BackoffSeconds: {backoff_seconds}"
+                )
+                # Notify frontend about retry
+                if socketio_instance and session_id:
+                    socketio_instance.emit('transcription_status', {
+                        'status': 'retrying',
+                        'message': f'Connecting to {service_name}... (attempt {attempt + 2}/{max_retries + 1})'
+                    }, room=session_id)
+                time.sleep(backoff_seconds)
+            else:
+                logger.error(f"❌ RETRY_EXHAUSTED_EXCEPTION | Service: {service_name} | Session: {session_id} | Exception: {type(e).__name__}: {e}")
+                return False
+    
+    return False
 
 # User session storage - each user gets their own isolated state
 user_sessions = {}
@@ -523,6 +608,8 @@ def handle_audio_stream(data):
     else:  # Default to Deepgram API
         if session.dg_connection:
             try:
+                # Reset silence timer when audio is received - user is actively speaking
+                reset_silence_timer(session)
                 # Track when audio is sent to Deepgram for response time calculation
                 session.last_audio_send_time = time.perf_counter()
                 session.dg_connection.send(audio_bytes)
@@ -555,13 +642,22 @@ def handle_toggle_transcription(data):
                 return
             
             logger.info(f"Starting Azure OpenAI connection for session {session.session_id} with language: {language_name}")
-            success = initialize_azure_openai_connection(socketio, language_name, session.session_id)
+            
+            # Use retry with exponential backoff
+            success = retry_with_backoff(
+                lambda: initialize_azure_openai_connection(socketio, language_name, session.session_id),
+                max_retries=STT_RETRY_COUNT,
+                session_id=session.session_id,
+                service_name="Azure OpenAI",
+                socketio_instance=socketio
+            )
+            
             if success:
                 socketio.emit('transcription_status', {'status': 'started', 'api': 'Azure OpenAI'}, room=session.session_id)
             else:
                 socketio.emit('transcription_status', {
                     'status': 'error',
-                    'message': 'Failed to start Azure OpenAI connection'
+                    'message': f'Failed to start Azure OpenAI connection after {STT_RETRY_COUNT + 1} attempts'
                 }, room=session.session_id)
         elif api_provider == "ElevenLabs ScribeV2":
             if not ELEVENLABS_AVAILABLE:
@@ -580,14 +676,23 @@ def handle_toggle_transcription(data):
                 return
             
             logger.info(f"Starting ElevenLabs connection for session {session.session_id} with language: {language_name}")
-            success = initialize_elevenlabs_connection(socketio, language_name, session.session_id)
+            
+            # Use retry with exponential backoff
+            success = retry_with_backoff(
+                lambda: initialize_elevenlabs_connection(socketio, language_name, session.session_id),
+                max_retries=STT_RETRY_COUNT,
+                session_id=session.session_id,
+                service_name="ElevenLabs",
+                socketio_instance=socketio
+            )
+            
             if success:
                 # Note: transcription_status 'started' is emitted by the handler when session starts
                 logger.info(f"ElevenLabs connection initialization started for session {session.session_id}")
             else:
                 socketio.emit('transcription_status', {
                     'status': 'error',
-                    'message': 'Failed to start ElevenLabs connection'
+                    'message': f'Failed to start ElevenLabs connection after {STT_RETRY_COUNT + 1} attempts'
                 }, room=session.session_id)
         else:  # Default to Deepgram API
             if not API_KEY:
@@ -598,11 +703,20 @@ def handle_toggle_transcription(data):
                 return
             
             logger.info(f"Starting Deepgram connection for session {session.session_id} with language: {language_name}")
-            success = initialize_deepgram_connection(session, language_name)
+            
+            # Use retry with exponential backoff
+            success = retry_with_backoff(
+                lambda: initialize_deepgram_connection(session, language_name),
+                max_retries=STT_RETRY_COUNT,
+                session_id=session.session_id,
+                service_name="Deepgram",
+                socketio_instance=socketio
+            )
+            
             if success:
                 socketio.emit('transcription_status', {'status': 'started', 'language': language_name, 'api': 'Deepgram API'}, room=session.session_id)
             else:
-                socketio.emit('transcription_status', {'status': 'error', 'message': 'Failed to start Deepgram connection'}, room=session.session_id)
+                socketio.emit('transcription_status', {'status': 'error', 'message': f'Failed to start Deepgram connection after {STT_RETRY_COUNT + 1} attempts'}, room=session.session_id)
     
     elif action == "stop":
         if api_provider == "Azure OpenAI":
@@ -679,6 +793,121 @@ def restart_deepgram(data):
     language_name = data.get("language", "English") if data else "English"
     logger.info(f'Restarting Deepgram connection for session {session.session_id} with language: {language_name}')
     initialize_deepgram_connection(session, language_name)
+
+@socketio.on('reconnect_transcription')
+def reconnect_transcription(data):
+    """
+    Handle reconnection request from frontend when transcription timeout is detected.
+    This uses retry with exponential backoff for seamless recovery.
+    """
+    session = get_user_session(request.sid)
+    api_provider = data.get("api", session.current_api_provider) if data else session.current_api_provider
+    language_name = data.get("language", "English") if data else "English"
+    
+    logger.info(f'🔄 RECONNECT_REQUEST | Session: {session.session_id} | Provider: {api_provider} | Language: {language_name}')
+    performance_logger.info(f'RECONNECT_REQUEST | Session: {session.session_id} | Provider: {api_provider}')
+    
+    # Notify frontend that we're attempting reconnection
+    socketio.emit('transcription_status', {
+        'status': 'retrying',
+        'message': f'Reconnecting to {api_provider}...'
+    }, room=session.session_id)
+    
+    if api_provider == "Azure OpenAI":
+        if not AZURE_OPENAI_AVAILABLE:
+            socketio.emit('transcription_status', {
+                'status': 'error',
+                'message': 'Azure OpenAI handler not available'
+            }, room=session.session_id)
+            return
+        
+        # Close existing connection first
+        close_azure_openai_connection(session.session_id)
+        
+        # Retry connection with backoff
+        success = retry_with_backoff(
+            lambda: initialize_azure_openai_connection(socketio, language_name, session.session_id),
+            max_retries=STT_RETRY_COUNT,
+            session_id=session.session_id,
+            service_name="Azure OpenAI",
+            socketio_instance=socketio
+        )
+        
+        if success:
+            logger.info(f'✅ RECONNECT_SUCCESS | Session: {session.session_id} | Provider: Azure OpenAI')
+            socketio.emit('transcription_status', {'status': 'started', 'api': 'Azure OpenAI'}, room=session.session_id)
+        else:
+            logger.error(f'❌ RECONNECT_FAILED | Session: {session.session_id} | Provider: Azure OpenAI')
+            socketio.emit('transcription_status', {
+                'status': 'error',
+                'message': f'Failed to reconnect to Azure OpenAI after {STT_RETRY_COUNT + 1} attempts'
+            }, room=session.session_id)
+    
+    elif api_provider == "ElevenLabs ScribeV2":
+        if not ELEVENLABS_AVAILABLE:
+            socketio.emit('transcription_status', {
+                'status': 'error',
+                'message': 'ElevenLabs handler not available'
+            }, room=session.session_id)
+            return
+        
+        # Close existing connection first
+        close_elevenlabs_connection(session.session_id)
+        
+        # Retry connection with backoff
+        success = retry_with_backoff(
+            lambda: initialize_elevenlabs_connection(socketio, language_name, session.session_id),
+            max_retries=STT_RETRY_COUNT,
+            session_id=session.session_id,
+            service_name="ElevenLabs",
+            socketio_instance=socketio
+        )
+        
+        if success:
+            logger.info(f'✅ RECONNECT_SUCCESS | Session: {session.session_id} | Provider: ElevenLabs')
+        else:
+            logger.error(f'❌ RECONNECT_FAILED | Session: {session.session_id} | Provider: ElevenLabs')
+            socketio.emit('transcription_status', {
+                'status': 'error',
+                'message': f'Failed to reconnect to ElevenLabs after {STT_RETRY_COUNT + 1} attempts'
+            }, room=session.session_id)
+    
+    else:  # Default to Deepgram
+        if not API_KEY:
+            socketio.emit('transcription_status', {
+                'status': 'error',
+                'message': 'DEEPGRAM_API_KEY not set'
+            }, room=session.session_id)
+            return
+        
+        # Close existing connection first
+        stop_silence_timer(session)
+        stop_keep_alive(session)
+        if session.dg_connection:
+            try:
+                session.dg_connection.finish()
+            except Exception as e:
+                logger.warning(f"Error closing Deepgram connection before reconnect: {e}")
+            session.dg_connection = None
+        
+        # Retry connection with backoff
+        success = retry_with_backoff(
+            lambda: initialize_deepgram_connection(session, language_name),
+            max_retries=STT_RETRY_COUNT,
+            session_id=session.session_id,
+            service_name="Deepgram",
+            socketio_instance=socketio
+        )
+        
+        if success:
+            logger.info(f'✅ RECONNECT_SUCCESS | Session: {session.session_id} | Provider: Deepgram')
+            socketio.emit('transcription_status', {'status': 'started', 'language': language_name, 'api': 'Deepgram API'}, room=session.session_id)
+        else:
+            logger.error(f'❌ RECONNECT_FAILED | Session: {session.session_id} | Provider: Deepgram')
+            socketio.emit('transcription_status', {
+                'status': 'error',
+                'message': f'Failed to reconnect to Deepgram after {STT_RETRY_COUNT + 1} attempts'
+            }, room=session.session_id)
 
 if __name__ == '__main__':
     logger.info(f"Starting Flask-SocketIO server on {HOST}:{PORT}")

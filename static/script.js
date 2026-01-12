@@ -13,9 +13,14 @@ let speechTimeout = null; // Timer for service timeout
 let lastSpeechTime = 0; // Timestamp of last detected speech
 let lastTranscriptionTime = 0; // Timestamp of last received transcription
 let speechDetectedInSession = false; // Flag to track if user spoke in current session
+let reconnectAttempts = 0; // Track reconnection attempts for auto-retry
+let awaitingReconnectionResult = false; // Track if we're waiting for reconnection to complete
+let reconnectionTimeoutId = null; // Timeout to force stop if reconnection doesn't succeed
+const RECONNECTION_TIMEOUT_MS = 5000; // 5 seconds max wait for reconnection result
 
 const SPEECH_THRESHOLD = 0.02; // Volume threshold to consider as speech (0.0 to 1.0)
 const SERVICE_TIMEOUT_MS = 1000; // 1 second timeout as requested
+const MAX_RECONNECT_ATTEMPTS = 3; // Maximum automatic reconnection attempts per session
 
 // Recent Transcriptions - localStorage key and max items
 const RECENT_TRANSCRIPTIONS_KEY = 'voiceTranscribe_recentTranscriptions';
@@ -185,12 +190,33 @@ socket.on("transcription_status", (data) => {
     // Reset state on error
     connectionReady = false;
     isTranscribing = false;
+    reconnectAttempts = 0; // Reset reconnect counter
+    awaitingReconnectionResult = false; // Reset reconnection flag
+    if (reconnectionTimeoutId) {
+      clearTimeout(reconnectionTimeoutId);
+      reconnectionTimeoutId = null;
+    }
     stopRecordingImmediate(); // Force stop
+
+  } else if (data.status === "retrying") {
+    // Show retry message seamlessly - don't stop recording, just inform user
+    console.log("🔄 Retrying connection:", data.message);
+    showStatusMessage(data.message);
+    // Keep trying - don't reset state, connection is being re-established
 
   } else if (data.status === "started") {
     // Backend connection is ready - flush any buffered audio
     connectionReady = true;
     isTranscribing = true;
+    reconnectAttempts = 0; // Reset reconnect counter on success
+    hideStatusMessage(); // Clear any retry messages
+
+    // Clear any pending stop timeout since we successfully reconnected
+    if (stopTimeout) {
+      clearTimeout(stopTimeout);
+      stopTimeout = null;
+    }
+
     console.log(`✅ Backend connection ready. Flushing ${pendingAudioChunks.length} buffered audio chunks...`);
 
     // Send all buffered audio chunks
@@ -251,6 +277,30 @@ socket.on("transcription_update", (data) => {
 
       searchInput.value = currentTranscription;
       searchInput.dispatchEvent(new Event('input', { bubbles: true }));
+
+      // If we were awaiting reconnection result and got transcription, stop recording now
+      if (awaitingReconnectionResult) {
+        console.log("✅ Transcription received after reconnection - stopping recording");
+        awaitingReconnectionResult = false;
+        reconnectAttempts = 0;
+        if (reconnectionTimeoutId) {
+          clearTimeout(reconnectionTimeoutId);
+          reconnectionTimeoutId = null;
+        }
+
+        // Save to recent transcriptions
+        addRecentTranscription(currentTranscription, selectedAPI);
+
+        // Stop the transcription and clean up
+        if (socket.connected) {
+          socket.emit("toggle_transcription", {
+            action: "stop",
+            api: selectedAPI
+          });
+        }
+
+        stopRecordingImmediate();
+      }
     }
   }
 });
@@ -548,6 +598,13 @@ function stopRecordingImmediate() {
   hideStatusMessage(); // Hide any errors on stop
   cleanupMicrophone(); // Clear intervals and analysers
 
+  // Clear reconnection state
+  if (reconnectionTimeoutId) {
+    clearTimeout(reconnectionTimeoutId);
+    reconnectionTimeoutId = null;
+  }
+  awaitingReconnectionResult = false;
+
   // Logic Cleanup
   if (microphone && microphone.type === 'mediarecorder') {
     if (microphone.recorder.state !== 'inactive') {
@@ -607,6 +664,8 @@ const startRecordingHandler = () => {
   startRecording().catch(console.error);
 };
 
+let timeoutCheckId = null; // Track the timeout check separately
+
 const stopRecordingHandler = () => {
   if (!isRecording && !isInitializing) return;
 
@@ -624,39 +683,95 @@ const stopRecordingHandler = () => {
 
   const micButton = document.getElementById("micButton");
 
+  // Clear any pending timeouts
   if (stopTimeout) clearTimeout(stopTimeout);
+  if (timeoutCheckId) clearTimeout(timeoutCheckId);
 
   if (micButton) {
     micButton.style.opacity = "0.7";
     micButton.classList.add("processing");
   }
 
-  // Check for timeout condition 1s after release
-  setTimeout(() => {
-    // Only check if we are still "waiting" (stopTimeout exists)
-    if (stopTimeout) {
-      const checkNow = Date.now();
-      // Logic: User spoke recently (within ~2s of release), 
-      // AND we haven't seen a transcript in > 1s
-      if (speechDetectedInSession && (lastStopTime - lastSpeechTime < 2000)) {
-        if (checkNow - lastTranscriptionTime > 1000) {
-          console.warn("⚠️ Service timeout detected post-release!");
-          showStatusMessage("Service timeout. Please retry.");
-        }
-      }
-    }
-  }, 1000);
-
   console.log("🔄 Voice stopped - waiting for final transcription...");
 
+  // Main stop timeout - clean up after waiting for transcription
   stopTimeout = setTimeout(() => {
     if (micButton) micButton.classList.remove("processing");
 
     const apiSelect = document.getElementById("apiSelect");
+    const languageSelect = document.getElementById("languageSelect");
     const selectedAPI = apiSelect ? apiSelect.value : "Deepgram API";
+    const selectedLanguage = languageSelect ? languageSelect.value : "English";
+
+    // Check for timeout ONLY if:
+    // 1. User spoke in this session
+    // 2. Speech was detected recently (within 2s of button release)
+    // 3. No transcription was received AT ALL, or the accumulated text is empty
+    // This avoids false positives when transcription is just slow but arrives eventually
+    const hasValidTranscription = currentTranscription && currentTranscription.trim().length > 0;
+    const speechWasRecent = (lastStopTime - lastSpeechTime) < 2000;
+
+    if (speechDetectedInSession && speechWasRecent && !hasValidTranscription) {
+      const timeSinceLastTranscription = Date.now() - lastTranscriptionTime;
+      if (timeSinceLastTranscription > 1500) {
+        console.warn("⚠️ Service timeout detected - no transcription received!");
+
+        // Attempt automatic reconnection if we haven't exceeded max attempts
+        if (reconnectAttempts < MAX_RECONNECT_ATTEMPTS) {
+          reconnectAttempts++;
+          awaitingReconnectionResult = true; // Flag that we're waiting for reconnection
+          console.log(`🔄 Attempting automatic reconnection (${reconnectAttempts}/${MAX_RECONNECT_ATTEMPTS})...`);
+          showStatusMessage(`Reconnecting... (attempt ${reconnectAttempts}/${MAX_RECONNECT_ATTEMPTS})`);
+
+          // Trigger reconnection on the backend
+          if (socket.connected) {
+            socket.emit("reconnect_transcription", {
+              api: selectedAPI,
+              language: selectedLanguage
+            });
+          }
+
+          // Set a timeout to force stop if reconnection doesn't succeed
+          if (reconnectionTimeoutId) {
+            clearTimeout(reconnectionTimeoutId);
+          }
+          reconnectionTimeoutId = setTimeout(() => {
+            if (awaitingReconnectionResult && isRecording) {
+              console.error("⏱️ Reconnection timeout - forcing stop");
+              showStatusMessage("Connection timed out. Please try again.");
+              awaitingReconnectionResult = false;
+              reconnectAttempts = 0;
+
+              // Stop the transcription and clean up
+              if (socket.connected) {
+                socket.emit("toggle_transcription", {
+                  action: "stop",
+                  api: selectedAPI
+                });
+              }
+              stopRecordingImmediate();
+            }
+            reconnectionTimeoutId = null;
+          }, RECONNECTION_TIMEOUT_MS);
+
+          // Don't stop recording yet, wait for reconnection result
+          return;
+        } else {
+          // Max reconnection attempts reached
+          console.error("❌ Max reconnection attempts reached. Please try again.");
+          showStatusMessage("Connection failed. Please try again.");
+          reconnectAttempts = 0; // Reset for next session
+          awaitingReconnectionResult = false; // Reset flag
+        }
+      }
+    } else {
+      // Reset reconnect attempts on successful transcription
+      reconnectAttempts = 0;
+      awaitingReconnectionResult = false;
+    }
 
     // Save transcription to recent list before stopping
-    if (currentTranscription && currentTranscription.trim().length > 0) {
+    if (hasValidTranscription) {
       addRecentTranscription(currentTranscription, selectedAPI);
     }
 
@@ -669,6 +784,7 @@ const stopRecordingHandler = () => {
 
     stopRecordingImmediate();
     stopTimeout = null;
+    timeoutCheckId = null;
   }, 1500);
 };
 

@@ -15,13 +15,14 @@ from flask_socketio import SocketIO
 
 logger = logging.getLogger(__name__)
 
-# Configure performance logger
+# Configure performance logger (only add handler if not already added)
 performance_logger = logging.getLogger('elevenlabs_performance')
 performance_logger.setLevel(logging.INFO)
-performance_handler = logging.FileHandler('voicesearch_performance.log')
-performance_formatter = logging.Formatter('%(asctime)s - %(filename)s:%(lineno)d - %(message)s')
-performance_handler.setFormatter(performance_formatter)
-performance_logger.addHandler(performance_handler)
+if not performance_logger.handlers:
+    performance_handler = logging.FileHandler('voicesearch_performance.log')
+    performance_formatter = logging.Formatter('%(asctime)s - %(filename)s:%(lineno)d - %(message)s')
+    performance_handler.setFormatter(performance_formatter)
+    performance_logger.addHandler(performance_handler)
 performance_logger.propagate = False
 
 # Try to import websockets for async WebSocket connection
@@ -438,6 +439,10 @@ def send_audio_to_elevenlabs(audio_data: bytes, session_id: str = None) -> bool:
             
             # Track when audio is sent
             session.last_audio_send_time = time.perf_counter()
+            
+            # Reset silence timer when audio is being sent - user is actively speaking
+            reset_elevenlabs_silence_timer(session)
+            
             session.ws.send(json.dumps(message))
             bytes_sent += len(chunk)
         
