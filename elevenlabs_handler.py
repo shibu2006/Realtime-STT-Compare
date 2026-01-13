@@ -507,10 +507,27 @@ def close_elevenlabs_connection(session_id: str = None):
     with session.audio_buffer_lock:
         session.audio_buffer = bytearray()
     
-    # Close WebSocket
+    # Save WebSocket reference before clearing
     ws_to_close = session.ws
+    
+    # Send commit message to finalize any pending transcripts before closing
+    if ws_to_close:
+        try:
+            import json
+            commit_message = {"message_type": "commit"}
+            ws_to_close.send(json.dumps(commit_message))
+            logger.info(f"Sent commit message to ElevenLabs for session {session.session_id}")
+            
+            # Wait briefly for the committed transcript to arrive
+            import time
+            time.sleep(0.5)  # 500ms wait for committed transcript
+        except Exception as e:
+            logger.debug(f"Could not send commit message to ElevenLabs for session {session.session_id}: {e}")
+    
+    # Clear session WebSocket reference
     session.ws = None
     
+    # Close WebSocket
     if ws_to_close:
         try:
             logger.info(f"Closing ElevenLabs WebSocket connection for session {session.session_id}")
