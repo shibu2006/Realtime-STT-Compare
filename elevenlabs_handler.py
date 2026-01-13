@@ -212,7 +212,7 @@ def initialize_elevenlabs_connection(socketio_instance: SocketIO, language_name:
         f"?model_id={model_id}"
         f"&audio_format=pcm_16000"
         f"&commit_strategy=vad"
-        f"&vad_silence_threshold_secs=1.0"
+        f"&vad_silence_threshold_secs=0.5"
         f"&vad_threshold=0.5"
     )
     
@@ -496,7 +496,19 @@ def close_elevenlabs_connection(session_id: str = None):
             return
         session = elevenlabs_sessions[session_id]
     
-    # Signal stop
+    # Get WebSocket reference before any changes
+    ws_to_close = session.ws
+    
+    # Wait briefly for VAD to commit any pending transcripts before closing
+    # VAD (Voice Activity Detection) handles commits automatically when it detects silence
+    # We just need to give it time to process the final audio
+    if ws_to_close and session.connection_open:
+        import time
+        # Wait longer than vad_silence_threshold_secs (0.5s) to ensure VAD has time to commit
+        logger.info(f"Waiting for ElevenLabs VAD to commit any pending transcripts for session {session.session_id}")
+        time.sleep(1.0)  # 1000ms wait for VAD to detect silence and commit
+    
+    # NOW signal stop (after we've had a chance to receive committed transcript)
     session.stop_event.set()
     session.connection_open = False
     
@@ -506,23 +518,6 @@ def close_elevenlabs_connection(session_id: str = None):
     # Clear audio buffer
     with session.audio_buffer_lock:
         session.audio_buffer = bytearray()
-    
-    # Save WebSocket reference before clearing
-    ws_to_close = session.ws
-    
-    # Send commit message to finalize any pending transcripts before closing
-    if ws_to_close:
-        try:
-            import json
-            commit_message = {"message_type": "commit"}
-            ws_to_close.send(json.dumps(commit_message))
-            logger.info(f"Sent commit message to ElevenLabs for session {session.session_id}")
-            
-            # Wait briefly for the committed transcript to arrive
-            import time
-            time.sleep(0.5)  # 500ms wait for committed transcript
-        except Exception as e:
-            logger.debug(f"Could not send commit message to ElevenLabs for session {session.session_id}: {e}")
     
     # Clear session WebSocket reference
     session.ws = None

@@ -124,12 +124,14 @@ root_logger = logging.getLogger()
 if root_logger.handlers:
     root_logger.handlers.clear()
 
+# Configure logging - file only (no console to prevent duplicates)
+# Note: use_reloader=False in socketio.run() prevents duplicate processes
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(name)s - %(levelname)s - %(filename)s:%(lineno)d - %(message)s',
     handlers=[
-        logging.FileHandler('voicesearch_app.log'),
-        logging.StreamHandler()  # Also log to console
+        logging.FileHandler('voicesearch_app.log')
+        # Removed StreamHandler to prevent duplicate entries
     ],
     force=True  # Python 3.8+: Forces reconfiguration even if root logger was already configured
 )
@@ -911,4 +913,6 @@ def reconnect_transcription(data):
 
 if __name__ == '__main__':
     logger.info(f"Starting Flask-SocketIO server on {HOST}:{PORT}")
-    socketio.run(app, debug=True, allow_unsafe_werkzeug=True, host=HOST, port=PORT)
+    # use_reloader=False prevents duplicate log entries from parent/child processes
+    # debug=True still gives us helpful error pages
+    socketio.run(app, debug=True, use_reloader=False, allow_unsafe_werkzeug=True, host=HOST, port=PORT)
