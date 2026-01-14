@@ -65,6 +65,9 @@ class ElevenLabsSession:
         self.audio_buffer = bytearray()
         self.audio_buffer_lock = threading.Lock()
         self.stop_event = threading.Event()
+        # Track last partial for fallback logging if no committed transcript received
+        self.last_partial_text = ""
+        self.last_partial_time = None
         
     def reset_performance_metrics(self):
         """Reset performance tracking for new session"""
@@ -74,6 +77,8 @@ class ElevenLabsSession:
         self.last_audio_send_time = None
         self.current_transcript = ""
         self.accumulated_transcript = ""
+        self.last_partial_text = ""
+        self.last_partial_time = None
 
 def get_elevenlabs_session(session_id: str, socketio: SocketIO) -> ElevenLabsSession:
     """Get or create ElevenLabs session for user"""
@@ -131,6 +136,25 @@ def handle_elevenlabs_silence_timeout(session: ElevenLabsSession):
     # Clean up session tracking
     if session.session_start_time:
         session_duration_ms = (time.perf_counter() - session.session_start_time) * 1000
+        
+        # If session ends with 0 committed transcripts but we have a partial, log it as fallback
+        if session.transcription_count == 0 and session.last_partial_text:
+            if session.last_partial_time and session.last_audio_send_time:
+                fallback_response_time_ms = (session.last_partial_time - session.last_audio_send_time) * 1000
+            else:
+                fallback_response_time_ms = 0
+            
+            time_since_start_ms = (session.last_partial_time - session.session_start_time) * 1000 if session.last_partial_time else session_duration_ms
+            
+            performance_logger.info(
+                f"TRANSCRIPTION_PARTIAL_FALLBACK | Session: {session.session_id} | Count: 1 | "
+                f"ResponseTime: {fallback_response_time_ms:.2f}ms | "
+                f"TimeSinceStart: {time_since_start_ms:.2f}ms | "
+                f"Text: \"{session.last_partial_text}\" | "
+                f"Note: VAD did not commit before silence timeout"
+            )
+            logger.warning(f"ElevenLabs session ended with uncommitted partial transcript for session {session.session_id}: '{session.last_partial_text}'")
+        
         logger.info(
             f"ElevenLabs session ended | Session: {session.session_id} | Duration: {session_duration_ms:.2f}ms | "
             f"TotalTranscriptions: {session.transcription_count} | Reason: SilenceTimeout"
@@ -145,6 +169,8 @@ def handle_elevenlabs_silence_timeout(session: ElevenLabsSession):
         session.last_audio_send_time = None
         session.current_transcript = ""
         session.accumulated_transcript = ""
+        session.last_partial_text = ""
+        session.last_partial_time = None
     
     # Notify ONLY this specific user to stop recording
     session.socketio.emit('silence_timeout', {
@@ -267,6 +293,26 @@ def initialize_elevenlabs_connection(socketio_instance: SocketIO, language_name:
             stop_elevenlabs_silence_timer(session)
             if session.session_start_time:
                 session_duration_ms = (time.perf_counter() - session.session_start_time) * 1000
+                
+                # If session ends with 0 committed transcripts but we have a partial, log it as fallback
+                if session.transcription_count == 0 and session.last_partial_text:
+                    # Calculate response time from last audio send to last partial
+                    if session.last_partial_time and session.last_audio_send_time:
+                        fallback_response_time_ms = (session.last_partial_time - session.last_audio_send_time) * 1000
+                    else:
+                        fallback_response_time_ms = 0
+                    
+                    time_since_start_ms = (session.last_partial_time - session.session_start_time) * 1000 if session.last_partial_time else session_duration_ms
+                    
+                    performance_logger.info(
+                        f"TRANSCRIPTION_PARTIAL_FALLBACK | Session: {session.session_id} | Count: 1 | "
+                        f"ResponseTime: {fallback_response_time_ms:.2f}ms | "
+                        f"TimeSinceStart: {time_since_start_ms:.2f}ms | "
+                        f"Text: \"{session.last_partial_text}\" | "
+                        f"Note: VAD did not commit before session ended"
+                    )
+                    logger.warning(f"ElevenLabs session ended with uncommitted partial transcript for session {session.session_id}: '{session.last_partial_text}'")
+                
                 performance_logger.info(
                     f"SESSION_END | Session: {session.session_id} | TotalDuration: {session_duration_ms:.2f}ms | "
                     f"TotalTranscriptions: {session.transcription_count}"
@@ -326,6 +372,10 @@ def handle_elevenlabs_message(session: ElevenLabsSession, message: str):
                     session.current_transcript = session.accumulated_transcript.strip() + " " + text.strip()
                 else:
                     session.current_transcript = text.strip()
+                
+                # Track last partial for fallback logging if no committed transcript is received
+                session.last_partial_text = session.current_transcript
+                session.last_partial_time = time.perf_counter()
                 
                 logger.info(f"ElevenLabs partial transcript for session {session.session_id}: {text} | Display: {session.current_transcript}")
                 # Emit the full transcript (accumulated + partial) for real-time feedback
