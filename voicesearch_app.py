@@ -463,7 +463,21 @@ def initialize_deepgram_connection(session, language_name="English"):
             
             # Calculate time since session start and time since last transcription
             current_time = time.perf_counter()
-            time_since_start_ms = (current_time - session.session_start_time) * 1000 if session.session_start_time else 0
+            
+            # Check if this is a late-arriving transcription after session ended (e.g., during reconnect)
+            # This can happen when a reconnect triggers on_close which resets metrics,
+            # but a transcription from the old connection still arrives
+            if not session.session_start_time or not session.last_audio_send_time:
+                logger.warning(
+                    f"Late-arriving transcription after session ended for {session.session_id}: \"{transcript}\" "
+                    f"(session_start_time={session.session_start_time}, last_audio_send_time={session.last_audio_send_time})"
+                )
+                # Still emit the transcription to the client (it's useful data)
+                # but skip performance logging since metrics would be invalid (0.00ms)
+                socketio.emit('transcription_update', {'transcription': transcript}, room=session.session_id)
+                return
+            
+            time_since_start_ms = (current_time - session.session_start_time) * 1000
             
             # Calculate time since last transcription (response latency)
             if session.last_transcription_time:
@@ -472,10 +486,7 @@ def initialize_deepgram_connection(session, language_name="English"):
                 time_since_last_ms = 0
             
             # Calculate transcription response time (time from audio send to transcription received)
-            if session.last_audio_send_time:
-                transcription_response_time_ms = (current_time - session.last_audio_send_time) * 1000
-            else:
-                transcription_response_time_ms = 0
+            transcription_response_time_ms = (current_time - session.last_audio_send_time) * 1000
             
             session.transcription_count += 1
             session.last_transcription_time = current_time
