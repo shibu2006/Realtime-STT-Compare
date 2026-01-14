@@ -264,6 +264,7 @@ class UserSession:
         self.silence_timer = None
         self.keep_alive_timer = None
         self.current_api_provider = "Deepgram API"
+        self.silence_timer_started = False  # Track if silence timer has been started (to start only on first audio)
         
     def reset_performance_metrics(self):
         """Reset performance tracking for new session"""
@@ -271,6 +272,7 @@ class UserSession:
         self.transcription_count = 0
         self.last_transcription_time = None
         self.last_audio_send_time = None
+        self.silence_timer_started = False  # Reset the silence timer started flag
 
 def get_user_session(session_id):
     """Get or create user session"""
@@ -300,17 +302,19 @@ def cleanup_user_session(session_id):
 deepgram = DeepgramClient(API_KEY) if API_KEY else None
 
 def reset_silence_timer(session):
-    """Reset the silence timeout timer when transcription is received"""
+    """Reset the silence timeout timer when transcription is received or audio is sent"""
     if session.silence_timer:
         session.silence_timer.cancel()
     session.silence_timer = threading.Timer(SILENCE_TIMEOUT_SEC, lambda: handle_silence_timeout(session))
     session.silence_timer.start()
+    session.silence_timer_started = True
 
 def stop_silence_timer(session):
     """Stop the silence timeout timer"""
     if session.silence_timer:
         session.silence_timer.cancel()
         session.silence_timer = None
+    session.silence_timer_started = False
 
 def handle_silence_timeout(session):
     """Handle silence timeout - automatically stop transcription for specific user"""
@@ -448,8 +452,8 @@ def initialize_deepgram_connection(session, language_name="English"):
         logger.info(f"Deepgram connection opened for session {session.session_id}: {open}")
         session.session_start_time = time.perf_counter()
         performance_logger.info(f"SESSION_START | Session: {session.session_id} | Language: {language_name} | Model: {model} | Timestamp: {time.time()}")
-        # Start silence timeout timer for this session
-        reset_silence_timer(session)
+        # NOTE: Silence timer is NOT started here - it will be started when first audio is received
+        # This prevents false "silence timeout" messages when user hasn't started speaking yet
 
     def on_message(self, result, **kwargs):
         transcript = result.channel.alternatives[0].transcript
@@ -610,7 +614,9 @@ def handle_audio_stream(data):
     else:  # Default to Deepgram API
         if session.dg_connection:
             try:
-                # Reset silence timer when audio is received - user is actively speaking
+                # Start or reset silence timer when audio is received - user is actively speaking
+                # The timer is started on first audio (not on connection open) to prevent
+                # false "silence timeout" messages when user hasn't started speaking yet
                 reset_silence_timer(session)
                 # Track when audio is sent to Deepgram for response time calculation
                 session.last_audio_send_time = time.perf_counter()

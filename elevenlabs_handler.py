@@ -61,6 +61,7 @@ class ElevenLabsSession:
         self.connection_open = False
         self.session_started = threading.Event()
         self.silence_timer = None
+        self.silence_timer_started = False  # Track if silence timer has been started (to start only on first audio)
         self.language = "Auto"
         self.audio_buffer = bytearray()
         self.audio_buffer_lock = threading.Lock()
@@ -79,6 +80,7 @@ class ElevenLabsSession:
         self.accumulated_transcript = ""
         self.last_partial_text = ""
         self.last_partial_time = None
+        self.silence_timer_started = False  # Reset the silence timer started flag
 
 def get_elevenlabs_session(session_id: str, socketio: SocketIO) -> ElevenLabsSession:
     """Get or create ElevenLabs session for user"""
@@ -104,17 +106,19 @@ def cleanup_elevenlabs_session(session_id: str):
             del elevenlabs_sessions[session_id]
 
 def reset_elevenlabs_silence_timer(session: ElevenLabsSession):
-    """Reset the silence timeout timer when transcription is received"""
+    """Reset the silence timeout timer when transcription is received or audio is sent"""
     if session.silence_timer:
         session.silence_timer.cancel()
     session.silence_timer = threading.Timer(ELEVENLABS_SILENCE_TIMEOUT_SEC, lambda: handle_elevenlabs_silence_timeout(session))
     session.silence_timer.start()
+    session.silence_timer_started = True
 
 def stop_elevenlabs_silence_timer(session: ElevenLabsSession):
     """Stop the silence timeout timer"""
     if session.silence_timer:
         session.silence_timer.cancel()
         session.silence_timer = None
+    session.silence_timer_started = False
 
 def handle_elevenlabs_silence_timeout(session: ElevenLabsSession):
     """Handle silence timeout - automatically stop transcription for specific session"""
@@ -350,8 +354,8 @@ def handle_elevenlabs_message(session: ElevenLabsSession, message: str):
             session.session_started.set()
             session.session_start_time = time.perf_counter()
             
-            # Start silence timeout timer
-            reset_elevenlabs_silence_timer(session)
+            # NOTE: Silence timer is NOT started here - it will be started when first audio is sent
+            # This prevents false "silence timeout" messages when user hasn't started speaking yet
             
             # Log session start
             performance_logger.info(

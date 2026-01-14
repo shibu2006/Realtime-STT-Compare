@@ -69,6 +69,7 @@ class AzureSession:
         self.current_segment_transcript = ""  # Current segment being transcribed (from deltas)
         self.connection_open = False
         self.silence_timer = None
+        self.silence_timer_started = False  # Track if silence timer has been started (to start only on first audio)
         self.language = "Auto"
         self.model = "gpt-4o-mini-transcribe"
         self.audio_buffer = bytearray()
@@ -83,6 +84,7 @@ class AzureSession:
         self.current_transcript = ""
         self.accumulated_transcript = ""
         self.current_segment_transcript = ""
+        self.silence_timer_started = False  # Reset the silence timer started flag
 
 def get_azure_session(session_id: str, socketio: SocketIO) -> AzureSession:
     """Get or create Azure session for user"""
@@ -107,17 +109,19 @@ def cleanup_azure_session(session_id: str):
             del azure_sessions[session_id]
 
 def reset_azure_silence_timer(session: AzureSession):
-    """Reset the silence timeout timer when transcription is received"""
+    """Reset the silence timeout timer when transcription is received or audio is sent"""
     if session.silence_timer:
         session.silence_timer.cancel()
     session.silence_timer = threading.Timer(AZURE_SILENCE_TIMEOUT_SEC, lambda: handle_azure_silence_timeout(session))
     session.silence_timer.start()
+    session.silence_timer_started = True
 
 def stop_azure_silence_timer(session: AzureSession):
     """Stop the silence timeout timer"""
     if session.silence_timer:
         session.silence_timer.cancel()
         session.silence_timer = None
+    session.silence_timer_started = False
 
 def handle_azure_silence_timeout(session: AzureSession):
     """Handle silence timeout - automatically stop transcription for specific session"""
@@ -251,8 +255,8 @@ def initialize_azure_openai_connection(socketio_instance: SocketIO, language_nam
             f"SESSION_START | Session: {session.session_id} | Language: {session.language} | Model: {session.model} | Timestamp: {time.time()}"
         )
         
-        # Start silence timeout timer
-        reset_azure_silence_timer(session)
+        # NOTE: Silence timer is NOT started here - it will be started when first audio is sent
+        # This prevents false "silence timeout" messages when user hasn't started speaking yet
         
         # Send session configuration
         session_config = {
