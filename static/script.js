@@ -798,11 +798,30 @@ document.addEventListener("DOMContentLoaded", () => {
   const searchInput = document.getElementById("searchInput");
   const languageSelect = document.getElementById("languageSelect");
   const apiSelect = document.getElementById("apiSelect");
+  const customPlaceholder = document.getElementById("customPlaceholder");
 
   if (!micButton || !searchButton || !searchInput || !languageSelect || !apiSelect) {
     console.error("Required DOM elements not found.");
     return;
   }
+
+  // Custom placeholder handling
+  function updatePlaceholderVisibility() {
+    if (customPlaceholder) {
+      if (searchInput.value.length > 0 || document.activeElement === searchInput) {
+        customPlaceholder.classList.add("hidden");
+      } else {
+        customPlaceholder.classList.remove("hidden");
+      }
+    }
+  }
+
+  searchInput.addEventListener("focus", updatePlaceholderVisibility);
+  searchInput.addEventListener("blur", updatePlaceholderVisibility);
+  searchInput.addEventListener("input", updatePlaceholderVisibility);
+
+  // Initial state
+  updatePlaceholderVisibility();
 
   const allLanguageOptions = Array.from(languageSelect.options).map(opt => ({
     value: opt.value,

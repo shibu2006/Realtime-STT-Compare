@@ -181,6 +181,30 @@ body {
   color: var(--text-muted);
 }
 
+/* Custom Placeholder with Icon */
+.custom-placeholder {
+  position: absolute;
+  left: 48px;
+  top: 50%;
+  transform: translateY(-50%);
+  color: var(--text-muted);
+  font-size: 1rem;
+  pointer-events: none;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  transition: opacity 0.2s ease;
+}
+
+.custom-placeholder i {
+  color: var(--primary);
+  font-size: 0.875rem;
+}
+
+.custom-placeholder.hidden {
+  opacity: 0;
+}
+
 .search-icon {
   position: absolute;
   left: 16px;
