@@ -515,8 +515,11 @@ def send_audio_to_elevenlabs(audio_data: bytes, session_id: str = None) -> bool:
             # Track when audio is sent
             session.last_audio_send_time = time.perf_counter()
             
-            # Reset silence timer when audio is being sent - user is actively speaking
-            reset_elevenlabs_silence_timer(session)
+            # Start silence timer on first audio send (if not already started)
+            # Timer is only RESET when transcription is received (indicating speech)
+            # This way, continuous silence will trigger timeout even if audio data is being sent
+            if not session.silence_timer_started:
+                reset_elevenlabs_silence_timer(session)
             
             session.ws.send(json.dumps(message))
             bytes_sent += len(chunk)

@@ -857,30 +857,94 @@ document.addEventListener("DOMContentLoaded", () => {
   apiSelect.addEventListener("change", updateLanguageOptions);
   updateLanguageOptions();
 
-  // Pointer Events
+  // Pointer Events - Hold-to-record with click-to-stop
+  // - If NOT recording: Hold for HOLD_THRESHOLD_MS to start recording
+  // - If ALREADY recording: Any click stops recording immediately
+  // This allows quick clicks to stop, but requires hold to start
+  let holdTimeout = null;
+  let recordingStartedThisPress = false; // Track if we started recording in THIS press cycle
+  const HOLD_THRESHOLD_MS = 150; // Minimum hold duration before recording starts
+
   micButton.addEventListener("mousedown", (e) => {
     e.preventDefault();
-    startRecordingHandler();
+    recordingStartedThisPress = false;
+
+    // If already recording, prepare to stop on mouseup (no need to wait)
+    if (isRecording || isInitializing) {
+      // Recording is active - we'll stop on mouseup
+      return;
+    }
+
+    // Not recording - delay starting until user has held for threshold
+    holdTimeout = setTimeout(() => {
+      recordingStartedThisPress = true;
+      startRecordingHandler();
+    }, HOLD_THRESHOLD_MS);
   });
 
   micButton.addEventListener("mouseup", (e) => {
     e.preventDefault();
-    stopRecordingHandler();
+
+    // Cancel pending start if released before threshold
+    if (holdTimeout) {
+      clearTimeout(holdTimeout);
+      holdTimeout = null;
+    }
+
+    // If recording is active (either from this press or a previous one), stop it
+    if (isRecording || isInitializing) {
+      stopRecordingHandler();
+      recordingStartedThisPress = false;
+    }
   });
 
   micButton.addEventListener("mouseleave", () => {
-    stopRecordingHandler();
+    // Cancel pending start if mouse leaves before threshold
+    if (holdTimeout) {
+      clearTimeout(holdTimeout);
+      holdTimeout = null;
+    }
+
+    // If we started recording in this press cycle, stop on leave
+    if (recordingStartedThisPress && (isRecording || isInitializing)) {
+      stopRecordingHandler();
+      recordingStartedThisPress = false;
+    }
   });
 
-  // Touch Events
+  // Touch Events - same logic for mobile
+  let touchHoldTimeout = null;
+  let touchRecordingStartedThisPress = false;
+
   micButton.addEventListener("touchstart", (e) => {
     e.preventDefault();
-    startRecordingHandler();
+    touchRecordingStartedThisPress = false;
+
+    // If already recording, prepare to stop on touchend
+    if (isRecording || isInitializing) {
+      return;
+    }
+
+    // Not recording - delay starting until user has held for threshold
+    touchHoldTimeout = setTimeout(() => {
+      touchRecordingStartedThisPress = true;
+      startRecordingHandler();
+    }, HOLD_THRESHOLD_MS);
   }, { passive: false });
 
   micButton.addEventListener("touchend", (e) => {
     e.preventDefault();
-    stopRecordingHandler();
+
+    if (touchHoldTimeout) {
+      clearTimeout(touchHoldTimeout);
+      touchHoldTimeout = null;
+    }
+
+    // If recording is active, stop it
+    if (isRecording || isInitializing) {
+      stopRecordingHandler();
+      touchRecordingStartedThisPress = false;
+    }
   }, { passive: false });
 
   // Keyboard Events

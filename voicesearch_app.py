@@ -625,10 +625,11 @@ def handle_audio_stream(data):
     else:  # Default to Deepgram API
         if session.dg_connection:
             try:
-                # Start or reset silence timer when audio is received - user is actively speaking
-                # The timer is started on first audio (not on connection open) to prevent
-                # false "silence timeout" messages when user hasn't started speaking yet
-                reset_silence_timer(session)
+                # Start silence timer on first audio (if not already started)
+                # Timer is only RESET when transcription is received (indicating speech)
+                # This way, continuous silence will trigger timeout even if audio data is being sent
+                if not session.silence_timer_started:
+                    reset_silence_timer(session)
                 # Track when audio is sent to Deepgram for response time calculation
                 session.last_audio_send_time = time.perf_counter()
                 session.dg_connection.send(audio_bytes)
