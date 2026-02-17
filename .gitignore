@@ -8,7 +8,6 @@ __pycache__/
 venv/
 .pytest_cache/
 .DS_Store
-voicesearch_app.log
-voicesearch_performance.log
+*.log
 /docs
 .env.local

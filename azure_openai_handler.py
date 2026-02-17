@@ -291,10 +291,12 @@ def initialize_azure_openai_connection(socketio_instance: SocketIO, language_nam
                 return
             
             ws.send(json.dumps(session_config))
-            logger.info(f"Azure OpenAI session configuration sent for session {session.session_id}")
+            logger.info(f"Azure OpenAI session configuration sent for session {session.session_id}: {json.dumps(session_config)}")
             
-            # Mark connection as open AFTER config is sent successfully
+            # Mark connection as open immediately after sending config (like standalone file)
+            # Don't wait for transcription_session.updated - Azure will buffer audio while processing config
             session.connection_open = True
+            logger.info(f"Azure OpenAI connection marked as open for session {session.session_id} - ready to receive audio")
             
         except Exception as e:
             logger.error(f"Error sending session configuration for session {session.session_id}: {e}")
@@ -306,10 +308,33 @@ def initialize_azure_openai_connection(socketio_instance: SocketIO, language_nam
             data = json.loads(message)
             event_type = data.get("type", "")
             
-            # Log all event types for debugging
+            # Log ALL event types for debugging
             logger.info(f"Azure OpenAI received event for session {session.session_id}: {event_type}")
+            
+            # Log full message for transcription-related events
             if event_type and "transcription" in event_type.lower():
-                logger.info(f"Azure OpenAI transcription event for session {session.session_id}: {event_type} | Data: {json.dumps(data)[:200]}")
+                logger.info(f"Azure OpenAI transcription event for session {session.session_id}: {event_type} | Full Data: {json.dumps(data)}")
+            else:
+                # Log abbreviated data for non-transcription events
+                logger.info(f"Azure OpenAI event data for session {session.session_id}: {json.dumps(data)[:300]}")
+            
+            # Start silence timer when speech is detected (not when audio is first sent)
+            # This prevents premature timeout when user hasn't started speaking yet
+            if event_type == "input_audio_buffer.speech_started":
+                if not session.silence_timer_started:
+                    reset_azure_silence_timer(session)
+                    logger.info(f"🎤 Speech detected - started silence timer for session {session.session_id}")
+                
+                # Notify frontend that speech was detected - this resets the frontend timeout
+                session.socketio.emit('transcription_status', {
+                    'status': 'processing',
+                    'message': 'Listening...'
+                }, room=session.session_id)
+                logger.info(f"📤 Sent 'processing' (speech detected) status to frontend for session {session.session_id}")
+            
+            # Log session updated event for debugging
+            if event_type == "transcription_session.updated":
+                logger.info(f"✅ Azure OpenAI session configuration applied for session {session.session_id}")
             
             # Handle incremental transcription updates (deltas)
             if event_type == "conversation.item.input_audio_transcription.delta":
@@ -363,6 +388,8 @@ def initialize_azure_openai_connection(socketio_instance: SocketIO, language_nam
             elif event_type in ["conversation.item.input_audio_transcription.completed", "conversation.item.input_audio_transcription.final"]:
                 transcript = data.get("transcript", "")
                 if transcript:
+                    logger.info(f"🎯 Azure OpenAI received COMPLETED transcription for session {session.session_id}: '{transcript}'")
+                    
                     # Add this completed segment to accumulated transcript
                     if session.accumulated_transcript and session.accumulated_transcript.strip():
                         session.accumulated_transcript = session.accumulated_transcript.strip() + " " + transcript.strip()
@@ -406,17 +433,46 @@ def initialize_azure_openai_connection(socketio_instance: SocketIO, language_nam
                     logger.info(f"Azure OpenAI {event_type} for session {session.session_id}: Segment='{transcript}' | Accumulated='{session.accumulated_transcript}'")
                     session.socketio.emit('transcription_update', {'transcription': session.current_transcript}, room=session.session_id)
                     logger.info(f"✅ Emitted transcription_update event for session {session.session_id} with {event_type}: '{session.current_transcript}'")
+                else:
+                    logger.warning(f"⚠️ Received {event_type} but transcript is empty for session {session.session_id}")
             
             # Handle conversation item created (new segment started)
             # Reset current_segment_transcript for the new utterance
             elif event_type == "conversation.item.created":
+                # Log the full item to see if transcription is included
+                item = data.get("item", {})
+                content = item.get("content", [])
+                logger.info(f"Azure OpenAI conversation.item.created for session {session.session_id} | Full item: {json.dumps(item)}")
+                
+                # Check if transcript is present in the item
+                for content_item in content:
+                    if content_item.get("type") == "input_audio":
+                        transcript_in_item = content_item.get("transcript")
+                        if transcript_in_item:
+                            logger.info(f"✅ Transcript found in conversation.item.created: '{transcript_in_item}'")
+                        else:
+                            logger.info(f"⏳ Transcript is NULL in conversation.item.created - waiting for transcription.completed event")
+                
                 # Reset current segment for the new conversation item
                 # The previous segment should already be in accumulated_transcript via completed event
                 session.current_segment_transcript = ""
                 logger.info(f"Azure OpenAI new conversation item created for session {session.session_id} - reset segment, accumulated so far: '{session.accumulated_transcript}'")
+                
+                # IMPORTANT: Reset silence timer to give time for transcription to arrive
+                # The transcription.completed event comes AFTER conversation.item.created
+                reset_azure_silence_timer(session)
+                logger.info(f"⏳ Reset silence timer after conversation.item.created - waiting for transcription for session {session.session_id}")
+                
+                # CRITICAL: Notify frontend that we're processing audio - this resets the frontend timeout
+                # Without this, the frontend may trigger a reconnect before transcription.completed arrives
+                session.socketio.emit('transcription_status', {
+                    'status': 'processing',
+                    'message': 'Processing speech...'
+                }, room=session.session_id)
+                logger.info(f"📤 Sent 'processing' status to frontend for session {session.session_id}")
         
         except Exception as e:
-            logger.error(f"Error processing Azure OpenAI message for session {session.session_id}: {e}")
+            logger.error(f"❌ Error processing Azure OpenAI message for session {session.session_id}: {e}")
             logger.exception("Full traceback:")
     
     def on_error(ws, error):
@@ -540,7 +596,7 @@ def send_audio_to_azure_openai(audio_data: bytes, session_id: str = None):
             session.audio_buffer.extend(audio_data)
             if len(session.audio_buffer) > AZURE_AUDIO_CHUNK_SIZE * 10:
                 session.audio_buffer = session.audio_buffer[-AZURE_AUDIO_CHUNK_SIZE * 5:]
-        logger.debug(f"Azure OpenAI connection establishing for session {session.session_id} - buffered {len(audio_data)} bytes")
+        logger.debug(f"Azure OpenAI connection establishing for session {session.session_id} - buffered {len(audio_data)} bytes (total buffer: {len(session.audio_buffer)} bytes)")
         return False
     
     # Double-check socket state before sending
@@ -588,14 +644,18 @@ def send_audio_to_azure_openai(audio_data: bytes, session_id: str = None):
             # Start silence timer on first audio send (if not already started)
             # Timer is only RESET when transcription is received (indicating speech)
             # This way, continuous silence will trigger timeout even if audio data is being sent
+            # NOTE: We start the timer on first audio, but it gets reset when transcription arrives
+            # If no transcription arrives within the timeout, we close the connection
             if not session.silence_timer_started:
-                reset_azure_silence_timer(session)
+                # Don't start silence timer immediately - wait for speech to be detected
+                # The timer will be started when we receive speech_started event
+                pass
             
             session.ws.send(json.dumps(message))
             bytes_sent += len(chunk)
         
-        if bytes_sent > 0:
-            logger.debug(f"📤 Sent {bytes_sent} bytes to Azure OpenAI for session {session.session_id}")
+        # if bytes_sent > 0:
+        #     logger.info(f"📤 Sent total {bytes_sent} bytes to Azure OpenAI for session {session.session_id}")
         return True
     
     except Exception as e:

@@ -103,8 +103,8 @@ def on_message(ws, message):
     try:
         data = json.loads(message)
         event_type = data.get("type", "")
-        #print("Event type:", event_type)
-        #print(data)   
+        print("Event type:", event_type)
+        print("Data:", json.dumps(data)[:300])   
         # Stream live incremental transcripts
         if event_type == "conversation.item.input_audio_transcription.delta":
             transcript_piece = data.get("delta", "")
