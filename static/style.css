@@ -76,6 +76,54 @@ body {
   margin-bottom: 24px;
 }
 
+.recording-mode-panel {
+  margin-bottom: 24px;
+}
+
+.mode-toggle {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 4px;
+  padding: 4px;
+  background: var(--input-bg);
+  border: 1px solid var(--border-color);
+  border-radius: 14px;
+}
+
+.mode-toggle-button {
+  border: none;
+  background: transparent;
+  color: var(--text-secondary);
+  font-family: "Inter", sans-serif;
+  font-size: 0.9375rem;
+  font-weight: 600;
+  padding: 12px 16px;
+  border-radius: 10px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.mode-toggle-button:hover:not(:disabled) {
+  color: var(--text-main);
+}
+
+.mode-toggle-button.active {
+  background: var(--bg-card);
+  color: var(--text-main);
+  box-shadow: 0 1px 3px rgba(15, 23, 42, 0.08);
+}
+
+.mode-toggle-button:disabled {
+  opacity: 0.65;
+  cursor: not-allowed;
+}
+
+.mode-hint {
+  color: var(--text-secondary);
+  font-size: 0.875rem;
+  line-height: 1.5;
+}
+
 .control-wrapper {
   display: flex;
   flex-direction: column;
@@ -266,6 +314,119 @@ body {
   background: var(--danger);
   opacity: 0.3;
   animation: ripple 1.5s cubic-bezier(0, 0.2, 0.8, 1) infinite;
+}
+
+.search-input-wrapper.openai-active .search-input,
+.search-input-wrapper.openai-active .custom-placeholder,
+.search-input-wrapper.openai-active .search-icon,
+.search-input-wrapper.openai-active .mic-icon-button {
+  opacity: 0;
+  pointer-events: none;
+}
+
+.openai-capture-bar {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 8px 14px 8px 18px;
+  border: 2px solid #f97316;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.98);
+  box-shadow: 0 10px 30px rgba(249, 115, 22, 0.12);
+  opacity: 0;
+  pointer-events: none;
+  transform: scale(0.98);
+  transition: opacity 0.2s ease, transform 0.2s ease;
+}
+
+.search-input-wrapper.openai-active .openai-capture-bar {
+  opacity: 1;
+  pointer-events: auto;
+  transform: scale(1);
+}
+
+.openai-leading-icon {
+  color: #a3a3a3;
+  font-size: 1rem;
+  flex-shrink: 0;
+}
+
+.openai-waveform {
+  flex: 1;
+  min-width: 0;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  overflow: hidden;
+}
+
+.openai-waveform-bar {
+  width: 4px;
+  height: var(--bar-height, 4px);
+  border-radius: 999px;
+  background: #9ca3af;
+  opacity: 1;
+  transition: height 0.1s ease, width 0.1s ease, background-color 0.1s ease, opacity 0.1s ease;
+}
+
+.openai-waveform.speaking .openai-waveform-bar {
+  width: 3px;
+  background: linear-gradient(180deg, #6b7280 0%, #374151 100%);
+  opacity: 0.95;
+}
+
+.openai-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+.openai-action-button {
+  width: 32px;
+  height: 32px;
+  border: none;
+  border-radius: 50%;
+  background: transparent;
+  color: #111827;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.openai-action-button:hover:not(:disabled) {
+  background: rgba(15, 23, 42, 0.06);
+}
+
+.openai-action-button:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.openai-action-confirm {
+  border: 1px solid rgba(15, 23, 42, 0.12);
+}
+
+.openai-action-cancel {
+  color: #374151;
+}
+
+.openai-capture-bar.processing {
+  border-color: #fb923c;
+}
+
+.openai-capture-bar.processing .openai-action-confirm {
+  background: #111827;
+  color: white;
+}
+
+.openai-capture-bar.processing .openai-action-cancel {
+  opacity: 0.45;
 }
 
 @keyframes ripple {
@@ -501,5 +662,14 @@ body {
 
   .settings-group {
     grid-template-columns: 1fr;
+  }
+
+  .mode-toggle {
+    grid-template-columns: 1fr;
+  }
+
+  .openai-capture-bar {
+    padding-left: 14px;
+    gap: 10px;
   }
 }

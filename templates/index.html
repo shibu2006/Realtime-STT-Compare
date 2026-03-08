@@ -62,6 +62,23 @@
       </div>
     </div>
 
+    <div class="recording-mode-panel">
+      <div class="control-wrapper">
+        <label class="control-label">Capture Mode</label>
+        <div class="mode-toggle" role="tablist" aria-label="Voice capture mode">
+          <button id="holdModeButton" class="mode-toggle-button active" type="button" aria-pressed="true">
+            Press & Hold
+          </button>
+          <button id="openAiModeButton" class="mode-toggle-button" type="button" aria-pressed="false">
+            OpenAI Style
+          </button>
+        </div>
+        <p id="recordingModeHint" class="mode-hint">
+          Hold the mic while speaking and release it when you want transcription to finish.
+        </p>
+      </div>
+    </div>
+
     <div class="search-container">
       <div class="search-input-wrapper">
         <i class="fas fa-search search-icon"></i>
@@ -72,6 +89,20 @@
         <button id="micButton" class="mic-icon-button" title="Hold to speak, click to stop">
           <i class="fas fa-microphone mic-icon"></i>
         </button>
+        <div id="openAiCaptureBar" class="openai-capture-bar" aria-hidden="true">
+          <div class="openai-leading-icon" aria-hidden="true">
+            <i class="fas fa-plus"></i>
+          </div>
+          <div id="openAiWaveform" class="openai-waveform" aria-hidden="true"></div>
+          <div class="openai-actions">
+            <button id="openAiCancelButton" class="openai-action-button openai-action-cancel" type="button" title="Cancel recording">
+              <i class="fas fa-times"></i>
+            </button>
+            <button id="openAiConfirmButton" class="openai-action-button openai-action-confirm" type="button" title="Finish and transcribe">
+              <i class="fas fa-check"></i>
+            </button>
+          </div>
+        </div>
       </div>
       <div id="statusMessage" class="status-message"></div>
       <button id="searchButton" class="search-button">

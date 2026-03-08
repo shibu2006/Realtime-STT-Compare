@@ -26,6 +26,16 @@ const MAX_RECONNECT_ATTEMPTS = 3; // Maximum automatic reconnection attempts per
 // Recent Transcriptions - localStorage key and max items
 const RECENT_TRANSCRIPTIONS_KEY = 'voiceTranscribe_recentTranscriptions';
 const MAX_RECENT_ITEMS = 10;
+const RECORDING_MODE_KEY = 'voiceTranscribe_recordingMode';
+const RECORDING_MODES = Object.freeze({
+  HOLD: 'hold',
+  OPENAI: 'openai'
+});
+
+let recordingMode = getStoredRecordingMode();
+let ignoreIncomingTranscription = false;
+let openAiWaveformAnimationId = null;
+let openAiSpeechActiveUntil = 0;
 
 // Load recent transcriptions from localStorage
 function getRecentTranscriptions() {
@@ -98,6 +108,220 @@ function deleteRecentTranscription(index) {
     saveRecentTranscriptions(recent);
     renderRecentTranscriptions();
   }
+}
+
+function getStoredRecordingMode() {
+  try {
+    const storedMode = localStorage.getItem(RECORDING_MODE_KEY);
+    return storedMode === RECORDING_MODES.OPENAI ? RECORDING_MODES.OPENAI : RECORDING_MODES.HOLD;
+  } catch (error) {
+    console.error('Error loading recording mode preference:', error);
+    return RECORDING_MODES.HOLD;
+  }
+}
+
+function saveRecordingMode(mode) {
+  try {
+    localStorage.setItem(RECORDING_MODE_KEY, mode);
+  } catch (error) {
+    console.error('Error saving recording mode preference:', error);
+  }
+}
+
+function getRecordingModeHint(mode = recordingMode) {
+  return mode === RECORDING_MODES.OPENAI
+    ? 'Click once to start speaking, then confirm or cancel when you are done.'
+    : 'Hold the mic while speaking and release it when you want transcription to finish.';
+}
+
+function getPlaceholderMarkup(mode = recordingMode) {
+  return mode === RECORDING_MODES.OPENAI
+    ? 'Click <i class="fas fa-microphone"></i> to start, then confirm or cancel...'
+    : 'Hold <i class="fas fa-microphone"></i> to record, release when done...';
+}
+
+function getMicButtonTitle(mode = recordingMode) {
+  return mode === RECORDING_MODES.OPENAI
+    ? 'Click to start recording'
+    : 'Hold to speak (or press and hold spacebar)';
+}
+
+function populateOpenAiWaveform() {
+  const waveform = document.getElementById('openAiWaveform');
+  if (!waveform || waveform.childElementCount > 0) return;
+
+  for (let index = 0; index < 36; index++) {
+    const bar = document.createElement('span');
+    bar.className = 'openai-waveform-bar';
+    bar.dataset.index = String(index);
+    bar.style.setProperty('--bar-height', '4px');
+    waveform.appendChild(bar);
+  }
+}
+
+function resetOpenAiWaveform() {
+  const waveform = document.getElementById('openAiWaveform');
+  if (!waveform) return;
+
+  waveform.classList.remove('speaking');
+  Array.from(waveform.children).forEach((bar) => {
+    bar.style.setProperty('--bar-height', '4px');
+  });
+}
+
+function renderOpenAiWaveformFrame() {
+  const waveform = document.getElementById('openAiWaveform');
+  const shouldAnimate = Boolean(
+    waveform
+    && recordingMode === RECORDING_MODES.OPENAI
+    && (isRecording || isInitializing)
+  );
+
+  if (!shouldAnimate) {
+    openAiWaveformAnimationId = null;
+    resetOpenAiWaveform();
+    return;
+  }
+
+  let rms = 0;
+  if (speechAnalyser) {
+    const dataArray = new Uint8Array(speechAnalyser.frequencyBinCount);
+    speechAnalyser.getByteTimeDomainData(dataArray);
+
+    let sum = 0;
+    for (let i = 0; i < dataArray.length; i++) {
+      const sample = (dataArray[i] - 128) / 128;
+      sum += sample * sample;
+    }
+    rms = Math.sqrt(sum / dataArray.length);
+  }
+
+  if (rms > SPEECH_THRESHOLD) {
+    openAiSpeechActiveUntil = Date.now() + 180;
+  }
+
+  const isSpeaking = rms > SPEECH_THRESHOLD || Date.now() < openAiSpeechActiveUntil;
+  waveform.classList.toggle('speaking', isSpeaking);
+
+  const bars = Array.from(waveform.children);
+  const center = (bars.length - 1) / 2;
+  const intensity = Math.min(1, rms / (SPEECH_THRESHOLD * 3.5 || 1));
+  const time = performance.now() / 140;
+
+  bars.forEach((bar, index) => {
+    if (!isSpeaking) {
+      bar.style.setProperty('--bar-height', '4px');
+      return;
+    }
+
+    const distance = Math.abs(index - center) / center;
+    const envelope = 1 - (distance * 0.72);
+    const oscillation = (Math.sin(time + index * 0.55) + 1) / 2;
+    const height = 8 + (intensity * envelope * (10 + oscillation * 20));
+    bar.style.setProperty('--bar-height', `${Math.max(6, height)}px`);
+  });
+
+  openAiWaveformAnimationId = requestAnimationFrame(renderOpenAiWaveformFrame);
+}
+
+function startOpenAiWaveformAnimation() {
+  if (openAiWaveformAnimationId !== null) return;
+  openAiSpeechActiveUntil = 0;
+  openAiWaveformAnimationId = requestAnimationFrame(renderOpenAiWaveformFrame);
+}
+
+function stopOpenAiWaveformAnimation() {
+  if (openAiWaveformAnimationId !== null) {
+    cancelAnimationFrame(openAiWaveformAnimationId);
+    openAiWaveformAnimationId = null;
+  }
+  openAiSpeechActiveUntil = 0;
+  resetOpenAiWaveform();
+}
+
+function syncRecordingModeUI() {
+  const body = document.body;
+  const holdModeButton = document.getElementById('holdModeButton');
+  const openAiModeButton = document.getElementById('openAiModeButton');
+  const recordingModeHint = document.getElementById('recordingModeHint');
+  const customPlaceholder = document.getElementById('customPlaceholder');
+  const micButton = document.getElementById('micButton');
+  const searchInput = document.getElementById('searchInput');
+  const searchInputWrapper = document.querySelector('.search-input-wrapper');
+  const openAiCaptureBar = document.getElementById('openAiCaptureBar');
+
+  const showOpenAiCaptureBar = recordingMode === RECORDING_MODES.OPENAI && (isRecording || isInitializing);
+  const controlsLocked = isRecording || isInitializing;
+  const isProcessing = openAiCaptureBar ? openAiCaptureBar.classList.contains('processing') : false;
+
+  if (body) {
+    body.dataset.recordingMode = recordingMode;
+  }
+
+  if (holdModeButton) {
+    holdModeButton.classList.toggle('active', recordingMode === RECORDING_MODES.HOLD);
+    holdModeButton.setAttribute('aria-pressed', String(recordingMode === RECORDING_MODES.HOLD));
+    holdModeButton.disabled = controlsLocked;
+  }
+
+  if (openAiModeButton) {
+    openAiModeButton.classList.toggle('active', recordingMode === RECORDING_MODES.OPENAI);
+    openAiModeButton.setAttribute('aria-pressed', String(recordingMode === RECORDING_MODES.OPENAI));
+    openAiModeButton.disabled = controlsLocked;
+  }
+
+  if (recordingModeHint) {
+    recordingModeHint.textContent = getRecordingModeHint();
+  }
+
+  if (customPlaceholder) {
+    customPlaceholder.innerHTML = getPlaceholderMarkup();
+    if (searchInput) {
+      const shouldHidePlaceholder = showOpenAiCaptureBar || searchInput.value.length > 0 || document.activeElement === searchInput;
+      customPlaceholder.classList.toggle('hidden', shouldHidePlaceholder);
+    }
+  }
+
+  if (micButton) {
+    micButton.title = getMicButtonTitle();
+  }
+
+  if (searchInputWrapper) {
+    searchInputWrapper.classList.toggle('openai-active', showOpenAiCaptureBar);
+  }
+
+  if (openAiCaptureBar) {
+    openAiCaptureBar.setAttribute('aria-hidden', String(!showOpenAiCaptureBar));
+    if (!showOpenAiCaptureBar) {
+      openAiCaptureBar.classList.remove('processing');
+    }
+  }
+
+  if (showOpenAiCaptureBar) {
+    startOpenAiWaveformAnimation();
+  } else {
+    stopOpenAiWaveformAnimation();
+  }
+
+  const openAiCancelButton = document.getElementById('openAiCancelButton');
+  const openAiConfirmButton = document.getElementById('openAiConfirmButton');
+
+  if (openAiCancelButton) {
+    openAiCancelButton.disabled = !showOpenAiCaptureBar || isProcessing;
+  }
+
+  if (openAiConfirmButton) {
+    openAiConfirmButton.disabled = !showOpenAiCaptureBar || isProcessing;
+  }
+}
+
+function setRecordingMode(mode) {
+  if (!Object.values(RECORDING_MODES).includes(mode)) return;
+  if (isRecording || isInitializing) return;
+
+  recordingMode = mode;
+  saveRecordingMode(mode);
+  syncRecordingModeUI();
 }
 
 // Render recent transcriptions in the UI
@@ -257,6 +481,11 @@ socket.on("transcription_update", (data) => {
   lastTranscriptionTime = Date.now();
   hideStatusMessage();
 
+  if (ignoreIncomingTranscription) {
+    console.log("Ignoring transcription update for a cancelled recording");
+    return;
+  }
+
   const searchInput = document.getElementById("searchInput");
   if (!searchInput) return;
 
@@ -380,6 +609,7 @@ function monitorAudioLevel() {
   if (rms > SPEECH_THRESHOLD) {
     lastSpeechTime = Date.now();
     speechDetectedInSession = true;
+    openAiSpeechActiveUntil = Date.now() + 180;
   }
 }
 
@@ -429,63 +659,40 @@ async function openMicrophone(microphone, socket, useWebAudio = false) {
   }
 
   if (useWebAudio && microphone.type === 'webaudio') {
-    return new Promise((resolve) => {
+    return (async () => {
       try {
         audioContext = new (window.AudioContext || window.webkitAudioContext)();
         const actualSampleRate = audioContext.sampleRate;
         const source = audioContext.createMediaStreamSource(microphone.stream);
-        const bufferSize = 2048;
-
-        audioProcessor = audioContext.createScriptProcessor(bufferSize, 1, 1);
         const targetSampleRate = 24000;
         const resampleRatio = targetSampleRate / actualSampleRate;
-
-        let audioBuffer = new Float32Array(0);
         const targetChunkSize = 1024;
 
-        audioProcessor.onaudioprocess = (event) => {
-          if (!isRecording && !isInitializing) return; // Guard clause
+        // Load and use AudioWorklet (replaces deprecated ScriptProcessorNode)
+        const scriptEl = document.currentScript || Array.from(document.scripts).find(s => s.src && s.src.includes('script.js'));
+        const workletUrl = scriptEl && scriptEl.src
+          ? scriptEl.src.replace('script.js', 'audio-processor.js')
+          : new URL('/static/audio-processor.js', window.location.origin).href;
+        await audioContext.audioWorklet.addModule(workletUrl);
 
-          const inputData = event.inputBuffer.getChannelData(0);
-
-          // Resampling logic
-          let resampledData;
-          if (actualSampleRate !== targetSampleRate) {
-            const outputLength = Math.floor(inputData.length * resampleRatio);
-            resampledData = new Float32Array(outputLength);
-
-            for (let i = 0; i < outputLength; i++) {
-              const srcIndex = i / resampleRatio;
-              const index = Math.floor(srcIndex);
-              const frac = srcIndex - index;
-
-              const sample1 = inputData[index] || 0;
-              const sample2 = inputData[Math.min(inputData.length - 1, index + 1)] || 0;
-              resampledData[i] = sample1 + frac * (sample2 - sample1);
-            }
-          } else {
-            resampledData = inputData;
+        audioProcessor = new AudioWorkletNode(audioContext, 'voice-capture-processor', {
+          numberOfInputs: 1,
+          numberOfOutputs: 1,
+          outputChannelCount: [1],
+          processorOptions: {
+            resampleRatio,
+            targetChunkSize
           }
+        });
 
-          const newBuffer = new Float32Array(audioBuffer.length + resampledData.length);
-          newBuffer.set(audioBuffer);
-          newBuffer.set(resampledData, audioBuffer.length);
-          audioBuffer = newBuffer;
-
-          while (audioBuffer.length >= targetChunkSize) {
-            const chunk = audioBuffer.slice(0, targetChunkSize);
-            audioBuffer = audioBuffer.slice(targetChunkSize);
-
-            const pcm16Data = new Int16Array(chunk.length);
-            for (let i = 0; i < chunk.length; i++) {
-              const s = Math.max(-1, Math.min(1, chunk[i]));
-              pcm16Data[i] = s < 0 ? s * 0x8000 : s * 0x7FFF;
-            }
-
+        audioProcessor.port.onmessage = (event) => {
+          if (!isRecording && !isInitializing) return;
+          const { type, data } = event.data;
+          if (type === 'audio' && data) {
             if (connectionReady) {
-              socket.emit("audio_stream", pcm16Data.buffer);
+              socket.emit("audio_stream", data);
             } else {
-              pendingAudioChunks.push(pcm16Data.buffer);
+              pendingAudioChunks.push(data);
               const maxChunks = 120;
               if (pendingAudioChunks.length > maxChunks) {
                 pendingAudioChunks.shift();
@@ -500,14 +707,12 @@ async function openMicrophone(microphone, socket, useWebAudio = false) {
         audioProcessor.connect(gainNode);
         gainNode.connect(audioContext.destination);
 
-        console.log("Client: Web Audio API microphone opened");
-
-        resolve();
+        console.log("Client: Web Audio API microphone opened (AudioWorklet)");
       } catch (error) {
         console.error("Error setting up Web Audio API:", error);
         throw error;
       }
-    });
+    })();
   } else if (microphone.type === 'mediarecorder') {
     return new Promise((resolve) => {
       microphone.recorder.onstart = () => {
@@ -550,7 +755,9 @@ async function startRecording() {
   const languageSelect = document.getElementById("languageSelect");
   if (micButton) {
     micButton.classList.add("recording");
-    micButton.classList.add("pressed");
+    if (recordingMode === RECORDING_MODES.HOLD) {
+      micButton.classList.add("pressed");
+    }
   }
   if (languageSelect) {
     languageSelect.disabled = true;
@@ -560,11 +767,14 @@ async function startRecording() {
   connectionReady = false;
   pendingAudioChunks = [];
   currentTranscription = "";
+  ignoreIncomingTranscription = false;
 
   const searchInput = document.getElementById("searchInput");
   if (searchInput) {
     searchInput.value = "";
   }
+
+  syncRecordingModeUI();
 
   const apiSelect = document.getElementById("apiSelect");
   const useWebAudio = apiSelect && (apiSelect.value === "Azure OpenAI" || apiSelect.value === "ElevenLabs ScribeV2");
@@ -624,12 +834,15 @@ function stopRecordingImmediate() {
   document.body.classList.remove("recording");
   const micButton = document.getElementById("micButton");
   const languageSelect = document.getElementById("languageSelect");
+  const openAiCaptureBar = document.getElementById("openAiCaptureBar");
   if (micButton) {
     micButton.classList.remove("recording");
     micButton.classList.remove("pressed");
     micButton.classList.remove("processing");
     micButton.style.opacity = "";
-    micButton.title = "Hold to speak (or press and hold spacebar)";
+  }
+  if (openAiCaptureBar) {
+    openAiCaptureBar.classList.remove("processing");
   }
   if (languageSelect) {
     languageSelect.disabled = false;
@@ -672,6 +885,7 @@ function stopRecordingImmediate() {
   connectionReady = false;
   pendingAudioChunks = [];
   console.log("Client: Microphone closed and resources cleaned");
+  syncRecordingModeUI();
 }
 
 let lastStartTime = 0;
@@ -723,6 +937,7 @@ const stopRecordingHandler = () => {
   lastStopTime = now;
 
   const micButton = document.getElementById("micButton");
+  const openAiCaptureBar = document.getElementById("openAiCaptureBar");
 
   // Clear any pending timeouts
   if (stopTimeout) clearTimeout(stopTimeout);
@@ -732,6 +947,10 @@ const stopRecordingHandler = () => {
     micButton.style.opacity = "0.7";
     micButton.classList.add("processing");
   }
+  if (openAiCaptureBar) {
+    openAiCaptureBar.classList.add("processing");
+  }
+  syncRecordingModeUI();
 
   console.log("🔄 Voice stopped - waiting for final transcription...");
   
@@ -837,6 +1056,52 @@ const stopRecordingHandler = () => {
   }, SERVICE_TIMEOUT_MS);
 };
 
+const cancelRecordingHandler = () => {
+  if (!isRecording && !isInitializing) return;
+
+  const searchInput = document.getElementById("searchInput");
+  const apiSelect = document.getElementById("apiSelect");
+  const selectedAPI = apiSelect ? apiSelect.value : "Deepgram API";
+
+  if (stopTimeout) {
+    clearTimeout(stopTimeout);
+    stopTimeout = null;
+  }
+  if (timeoutCheckId) {
+    clearTimeout(timeoutCheckId);
+    timeoutCheckId = null;
+  }
+  if (reconnectionTimeoutId) {
+    clearTimeout(reconnectionTimeoutId);
+    reconnectionTimeoutId = null;
+  }
+
+  if (isInitializing) {
+    pendingStop = true;
+  }
+
+  ignoreIncomingTranscription = true;
+  waitingForFinalTranscription = false;
+  awaitingReconnectionResult = false;
+  reconnectAttempts = 0;
+  currentTranscription = "";
+  hideStatusMessage();
+
+  if (searchInput) {
+    searchInput.value = "";
+    searchInput.dispatchEvent(new Event('input', { bubbles: true }));
+  }
+
+  if (socket.connected) {
+    socket.emit("toggle_transcription", {
+      action: "stop",
+      api: selectedAPI
+    });
+  }
+
+  stopRecordingImmediate();
+};
+
 document.addEventListener("DOMContentLoaded", () => {
   const micButton = document.getElementById("micButton");
   const searchButton = document.getElementById("searchButton");
@@ -844,6 +1109,10 @@ document.addEventListener("DOMContentLoaded", () => {
   const languageSelect = document.getElementById("languageSelect");
   const apiSelect = document.getElementById("apiSelect");
   const customPlaceholder = document.getElementById("customPlaceholder");
+  const holdModeButton = document.getElementById("holdModeButton");
+  const openAiModeButton = document.getElementById("openAiModeButton");
+  const openAiCancelButton = document.getElementById("openAiCancelButton");
+  const openAiConfirmButton = document.getElementById("openAiConfirmButton");
 
   if (!micButton || !searchButton || !searchInput || !languageSelect || !apiSelect) {
     console.error("Required DOM elements not found.");
@@ -853,7 +1122,10 @@ document.addEventListener("DOMContentLoaded", () => {
   // Custom placeholder handling
   function updatePlaceholderVisibility() {
     if (customPlaceholder) {
-      if (searchInput.value.length > 0 || document.activeElement === searchInput) {
+      const shouldHide = searchInput.value.length > 0
+        || document.activeElement === searchInput
+        || (recordingMode === RECORDING_MODES.OPENAI && (isRecording || isInitializing));
+      if (shouldHide) {
         customPlaceholder.classList.add("hidden");
       } else {
         customPlaceholder.classList.remove("hidden");
@@ -867,6 +1139,24 @@ document.addEventListener("DOMContentLoaded", () => {
 
   // Initial state
   updatePlaceholderVisibility();
+  populateOpenAiWaveform();
+  syncRecordingModeUI();
+
+  if (holdModeButton) {
+    holdModeButton.addEventListener("click", () => setRecordingMode(RECORDING_MODES.HOLD));
+  }
+
+  if (openAiModeButton) {
+    openAiModeButton.addEventListener("click", () => setRecordingMode(RECORDING_MODES.OPENAI));
+  }
+
+  if (openAiCancelButton) {
+    openAiCancelButton.addEventListener("click", cancelRecordingHandler);
+  }
+
+  if (openAiConfirmButton) {
+    openAiConfirmButton.addEventListener("click", stopRecordingHandler);
+  }
 
   const allLanguageOptions = Array.from(languageSelect.options).map(opt => ({
     value: opt.value,
@@ -909,8 +1199,10 @@ document.addEventListener("DOMContentLoaded", () => {
   let holdTimeout = null;
   let recordingStartedThisPress = false; // Track if we started recording in THIS press cycle
   const HOLD_THRESHOLD_MS = 150; // Minimum hold duration before recording starts
+  let openAiTouchTriggered = false;
 
   micButton.addEventListener("mousedown", (e) => {
+    if (recordingMode === RECORDING_MODES.OPENAI) return;
     e.preventDefault();
     recordingStartedThisPress = false;
 
@@ -928,6 +1220,7 @@ document.addEventListener("DOMContentLoaded", () => {
   });
 
   micButton.addEventListener("mouseup", (e) => {
+    if (recordingMode === RECORDING_MODES.OPENAI) return;
     e.preventDefault();
 
     // Cancel pending start if released before threshold
@@ -944,6 +1237,7 @@ document.addEventListener("DOMContentLoaded", () => {
   });
 
   micButton.addEventListener("mouseleave", () => {
+    if (recordingMode === RECORDING_MODES.OPENAI) return;
     // Cancel pending start if mouse leaves before threshold
     if (holdTimeout) {
       clearTimeout(holdTimeout);
@@ -963,6 +1257,11 @@ document.addEventListener("DOMContentLoaded", () => {
 
   micButton.addEventListener("touchstart", (e) => {
     e.preventDefault();
+
+    if (recordingMode === RECORDING_MODES.OPENAI) {
+      return;
+    }
+
     touchRecordingStartedThisPress = false;
 
     // If already recording, prepare to stop on touchend
@@ -980,6 +1279,17 @@ document.addEventListener("DOMContentLoaded", () => {
   micButton.addEventListener("touchend", (e) => {
     e.preventDefault();
 
+    if (recordingMode === RECORDING_MODES.OPENAI) {
+      if (!isRecording && !isInitializing) {
+        openAiTouchTriggered = true;
+        startRecordingHandler();
+        setTimeout(() => {
+          openAiTouchTriggered = false;
+        }, 0);
+      }
+      return;
+    }
+
     if (touchHoldTimeout) {
       clearTimeout(touchHoldTimeout);
       touchHoldTimeout = null;
@@ -992,9 +1302,39 @@ document.addEventListener("DOMContentLoaded", () => {
     }
   }, { passive: false });
 
+  micButton.addEventListener("click", (e) => {
+    if (recordingMode !== RECORDING_MODES.OPENAI) return;
+    e.preventDefault();
+
+    if (openAiTouchTriggered) {
+      openAiTouchTriggered = false;
+      return;
+    }
+
+    if (!isRecording && !isInitializing) {
+      startRecordingHandler();
+    }
+  });
+
   // Keyboard Events
   let spacebarPressed = false;
   document.addEventListener("keydown", (e) => {
+    if (recordingMode === RECORDING_MODES.OPENAI) {
+      if (document.activeElement === searchInput) return;
+
+      if (e.code === "Space" && !e.repeat && !isRecording && !isInitializing) {
+        e.preventDefault();
+        startRecordingHandler();
+      } else if (e.code === "Enter" && (isRecording || isInitializing)) {
+        e.preventDefault();
+        stopRecordingHandler();
+      } else if (e.code === "Escape" && (isRecording || isInitializing)) {
+        e.preventDefault();
+        cancelRecordingHandler();
+      }
+      return;
+    }
+
     if (e.code === "Space" && document.activeElement !== searchInput && !spacebarPressed) {
       e.preventDefault();
       spacebarPressed = true;
@@ -1003,6 +1343,8 @@ document.addEventListener("DOMContentLoaded", () => {
   });
 
   document.addEventListener("keyup", (e) => {
+    if (recordingMode === RECORDING_MODES.OPENAI) return;
+
     if (e.code === "Space" && spacebarPressed) {
       e.preventDefault();
       spacebarPressed = false;
@@ -1011,6 +1353,8 @@ document.addEventListener("DOMContentLoaded", () => {
   });
 
   window.addEventListener("blur", () => {
+    if (recordingMode === RECORDING_MODES.OPENAI) return;
+
     if (spacebarPressed) {
       spacebarPressed = false;
       stopRecordingHandler();
